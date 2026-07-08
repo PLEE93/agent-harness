@@ -1,0 +1,28 @@
+mode: standard
+description: Multi-seat workflow with explicit handoffs
+phases:
+  - name: plan
+    type: plan
+    model: planner          # alias: defaults to caller
+    max_turns: 20
+    output_contract:
+      phases: [object]
+      done_criteria: [string]
+
+  - name: execute
+    type: execute
+    model: executor         # alias: defaults to caller
+    max_turns: 40
+    handoff_in: plan
+    output_contract:
+      result: string
+      artifacts: [string]
+
+  - name: verify
+    type: test
+    model: verifier         # alias: defaults to caller
+    max_turns: 20
+    handoff_in: execute
+    output_contract:
+      verdict: pass|fail
+      evidence: [string]

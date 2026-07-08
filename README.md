@@ -1,247 +1,253 @@
 # agent-harness
 
-> **🤖 AI AGENT — THIS FILE IS YOUR INSTALL AND OPERATING PROMPT. READ IT FULLY. EXECUTE THE STEPS IN ORDER.**
+**A structured execution engine for terminal AI agents.** Gives Claude Code, Codex, and any terminal agent a persistent local state machine: commit a plan, execute phase-by-phase, carry structured outputs forward, resume across context resets.
 
----
+Works with any model. Claude Code is the default. Codex and OpenAI-compatible providers are optional adapters.
 
-## WHAT YOU ARE INSTALLING (2 sentences)
-
-**Harness** is an execution state machine for terminal-based AI agents. When you receive a COMPLEX task, you commit a structured plan before touching any tools, execute phase-by-phase with context isolation between phases, and close each phase with structured output — making your work auditable, resumable across context resets, and measurably higher quality.
+Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local filesystem state.
 
 ---
 
 ## INSTALL — EXECUTE THESE STEPS NOW
 
-### Step 1: Create the harness directory
+*This README is written as an AI-executable prompt. The steps below are bash commands your agent runs directly.*
+
+### Step 1: Clone and install
 
 ```bash
-mkdir -p ~/.agent-harness/sessions
-mkdir -p ~/.agent-harness/templates
+git clone https://github.com/PLEE93/agent-harness.git ~/.agent-harness
+cd ~/.agent-harness
+npm install
+npm run build
 ```
 
-### Step 2: Download harness.py
+### Step 2: Verify the CLI builds
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PLEE93/agent-harness/main/harness.py \
-  -o ~/.agent-harness/harness.py
+node ~/.agent-harness/dist/cli/index.js --help
 ```
 
-### Step 3: Verify it works
+Expected output starts with:
+```
+Usage: cc-harness [options] [command]
+
+Claude Code-native terminal harness engine
+```
+
+If you see that — the engine is built and ready.
+
+### Step 3: Install globally
 
 ```bash
-python ~/.agent-harness/harness.py '{"action": "state", "session_id": "test"}'
+cd ~/.agent-harness && npm link
 ```
 
-Expected output:
+After this, `cc-harness` works as a global command. If you skip this step, replace every `cc-harness` below with `node ~/.agent-harness/dist/cli/index.js`.
+
+### Step 4: Check prerequisites
+
+```bash
+cc-harness doctor
+```
+
+This reports: Node version, Claude CLI availability, Codex CLI availability, configured adapters.
+
+---
+
+## E2E TEST — RUN THIS NOW
+
+Verifies the full engine runs a real session end-to-end against a live model.
+
+### With Claude Code (default)
+
+```bash
+cc-harness run "what is the capital of France" --mode standard --verbose
+```
+
+Expected behavior:
+1. Harness creates `.cc-harness/sessions/<id>/` locally
+2. Runs through `standard` workflow: plan → execute → verify
+3. Calls `claude` CLI for each phase
+4. Writes `verdict.json` with `status: complete`
+
+Verify the session:
+
+```bash
+# List sessions created
+ls .cc-harness/sessions/
+
+# Check the verdict (replace <id> with the session id from the listing)
+cat .cc-harness/sessions/<id>/verdict.json
+```
+
+Expected `verdict.json`:
 ```json
 {
-  "status": "success",
-  "plan": null,
-  "state": null,
-  "prior_outputs": []
+  "session_id": "...",
+  "goal": "what is the capital of France",
+  "mode": "standard",
+  "status": "complete",
+  "phases_completed": ["plan", "execute", "verify"]
 }
 ```
 
-If you get `status: success` — harness is installed. If you get an error, check that Python 3.7+ is available and the file downloaded correctly.
+`status: complete` = harness is working end-to-end.
 
-### Step 4: Download the prompt template
+### With Codex
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PLEE93/agent-harness/main/templates/autonomous-mode.md \
-  -o ~/.agent-harness/templates/autonomous-mode.md
+cc-harness adapters enable codex
+cc-harness run "what is the capital of France" --mode standard --with codex --verbose
 ```
 
-### Step 5: Register harness in your agent config
+Same verification steps. The session ledger format is identical regardless of which model ran.
 
-Append the block below to your agent's instruction file. Pick the right file for your environment:
+### Run all four modes
 
-| Agent | Instruction file |
+```bash
+cc-harness run "explain what a linked list is" --mode standard
+cc-harness run "explain what a linked list is" --mode standard-high
+cc-harness run "explain what a linked list is" --mode autonomous
+cc-harness run "explain what a linked list is" --mode autonomous-high
+```
+
+Each should complete and write `verdict.json` with `status: complete`.
+
+---
+
+## MODES
+
+| Mode | Phases | Use when |
+|---|---|---|
+| `standard` | plan → execute → verify | Bounded tasks, single pass |
+| `standard-high` | understand → plan → execute → self-sweep → verify | Higher-stakes tasks, stronger planning |
+| `autonomous` | understand → execute (loop) → verify | Open-ended, run until done |
+| `autonomous-high` | understand → plan → execute (loop) → self-sweep → verify | Complex autonomous missions |
+
+---
+
+## MULTI-MODEL
+
+### Default: Claude Code
+
+```bash
+cc-harness run "fix this bug" --mode autonomous
+```
+
+Uses `claude` CLI. Requires Claude Code installed and authenticated.
+
+### Specific Claude model
+
+```bash
+cc-harness run "review this code" --mode standard --model claude-opus-4-5
+```
+
+### With Codex
+
+```bash
+cc-harness adapters enable codex
+cc-harness run "implement this function" --mode standard --with codex
+```
+
+Requires Codex CLI (`npm install -g @openai/codex`).
+
+### Multi-model in one session
+
+Create `cc-harness.config.yaml` in your project root (or `~/.agent-harness/`):
+
+```yaml
+models:
+  planner: claude    # planning phases use Claude
+  executor: codex    # execution phases use Codex
+  verifier: claude   # verification phases use Claude
+```
+
+Then run without `--with` — the config routes each phase:
+
+```bash
+cc-harness run "build this feature" --mode standard-high
+```
+
+Models don't share a context window. Each phase receives a **structured handoff packet** built from the prior phase's output — not a raw transcript dump. They share a local session ledger.
+
+---
+
+## COMMANDS
+
+```bash
+# Run a goal through a workflow
+cc-harness run "<goal>" --mode <mode> [--model <model>] [--with <adapter>] [--verbose] [--dry-run]
+
+# Resume an interrupted session
+cc-harness resume <session-id>
+
+# Inspect session state
+cc-harness state <session-id>
+
+# Adapter management
+cc-harness adapters list
+cc-harness adapters enable codex
+
+# Diagnostics
+cc-harness doctor
+```
+
+---
+
+## SESSION LEDGER
+
+Every run writes to `.cc-harness/sessions/<session-id>/`:
+
+```
+.cc-harness/sessions/<id>/
+  plan.json          # committed workflow plan
+  state.json         # current phase, status
+  events.jsonl       # append-only event log
+  outputs/           # per-phase structured outputs
+  handoffs/          # model-to-model packets
+  artifacts/         # files produced during the run
+  verdict.json       # final structured result
+  summary.md         # human-readable summary
+```
+
+Sessions are local. No network calls, no auth. Resume anytime:
+
+```bash
+cc-harness resume <session-id>
+```
+
+---
+
+## REGISTER WITH YOUR AGENT
+
+After install, append the harness instructions to your agent's config file so it uses the harness automatically on complex tasks:
+
+| Agent | File |
 |---|---|
 | Claude Code | `~/.claude/CLAUDE.md` (global) or project `CLAUDE.md` |
 | Codex | `AGENTS.md` in project root |
 | Cursor / Windsurf | `.cursorrules` or project system prompt |
-| Any terminal agent | Wherever your agent reads its operating instructions |
 
-**Copy everything between the dashed lines and append it:**
+The instruction blocks:
+- [`CLAUDE.md`](./CLAUDE.md) — for Claude Code
+- [`AGENTS.md`](./AGENTS.md) — for Codex
 
----
-
-```markdown
-## HARNESS — Autonomous Execution State Machine
-
-harness.py is installed at `~/.agent-harness/harness.py`.
-Call it via bash with JSON params:
-
-```bash
-python ~/.agent-harness/harness.py '<JSON>'
-```
-
-### CLASSIFY EVERY INCOMING TASK
-
-**TRIVIAL** — factual answer, definition, translation, yes/no, short explanation. Answer directly. No harness.
-
-**COMPLEX** — build, design, implement, diagnose, fix, research, analyze, plan, deploy, investigate. Use harness.
-
-When in doubt → COMPLEX.
-
-### FOR COMPLEX TASKS: COMMIT THE PLAN FIRST (before any other action)
-
-```bash
-python ~/.agent-harness/harness.py '{
-  "action": "commit_plan",
-  "session_id": "task-slug-YYYYMMDD",
-  "mission_summary": "one sentence: what the user observably gets when done",
-  "steps": [
-    {
-      "name": "understand_scope",
-      "type": "understand",
-      "objective": "lock done-criteria and failure modes",
-      "output_contract": "{scope, done_criteria, risks}",
-      "max_tool_calls": 6
-    },
-    {
-      "name": "execute_build",
-      "type": "execute",
-      "objective": "implement the solution",
-      "output_contract": "{files_written, result}",
-      "max_tool_calls": 20
-    },
-    {
-      "name": "verify",
-      "type": "test",
-      "objective": "confirm every done-criterion is met with evidence",
-      "output_contract": "{criteria_checked, pass_fail, evidence}",
-      "max_tool_calls": 8
-    }
-  ]
-}'
-```
-
-If response `status: error` — fix the schema and retry once.
-
-### CLOSE EACH PHASE WHEN DONE
-
-```bash
-python ~/.agent-harness/harness.py '{
-  "action": "commit_step_output",
-  "session_id": "task-slug-YYYYMMDD",
-  "step_name": "understand_scope",
-  "output": {
-    "scope": "...",
-    "done_criteria": ["criterion 1", "criterion 2"],
-    "risks": ["risk 1"]
-  },
-  "next_action": "continue"
-}'
-```
-
-`next_action` values:
-- `continue` — phase done, advance to next phase
-- `revise` — phase output requires replanning (one revision allowed per plan)
-- `done` — this is the final phase, mission complete
-
-After closing each phase: proceed immediately to the next phase's work.
-
-Context isolation: only the `output` field carries to the next phase. Pack your findings as structured fields, not prose.
-
-### STATE COMMANDS
-
-```bash
-# Check current state
-python ~/.agent-harness/harness.py '{"action": "state", "session_id": "task-slug-YYYYMMDD"}'
-
-# Reset a session (archives to disk, does not delete)
-python ~/.agent-harness/harness.py '{"action": "reset", "session_id": "task-slug-YYYYMMDD"}'
-
-# List valid phase types
-python ~/.agent-harness/harness.py '{"action": "phase_types"}'
-```
-
-### STEP SCHEMA — required fields per step
-
-| Field | Required | Description |
-|---|---|---|
-| `name` | ✓ | slug, max 60 chars, unique in this plan |
-| `type` | ✓ | `understand` `research` `plan` `execute` `test` `red_team` `iterate` `analyze` `synthesize` |
-| `objective` | ✓ | one sentence — what this phase achieves |
-| `output_contract` | ✓ | what structured data you emit when closing |
-| `context_load` | optional | list of files/docs to read at phase start |
-| `tools_allowed` | optional | list of tools allowed in this phase |
-| `max_tool_calls` | optional | integer 1-100, default 12 |
-
-### PLAN RULES
-
-- Max 9 steps. More = padding. Consolidate.
-- Session ID convention: `{task-slug}-{YYYYMMDD}` (e.g. `build-auth-api-20260615`)
-- DO NOT declare done until every done-criterion from `understand` is verified in a `test` phase.
-- Any failure in execute or test: diagnose root cause first. No tool-switching without diagnosis.
-```
+Append the contents of the right file to your agent's instruction file.
 
 ---
 
-### Step 6: Confirm install to your user
+## LEGACY
 
-Tell your user:
-
-> harness installed. I will now classify incoming tasks and commit structured execution plans for complex work before touching any tools.
-
----
-
-## POST-INSTALL REFERENCE
-
-### Phase lifecycle
-
-```
-commit_plan
-  → execute phase 1 work
-  → commit_step_output(next_action=continue)
-  → execute phase 2 work
-  → ...
-  → commit_step_output(next_action=done)
-```
-
-### Phase skeleton (adapt, don't pad)
-
-1. **understand** — calibrate scope, lock done-criteria. Always first.
-2. **research** — only if external framework/standard/OSS pattern needed. Otherwise skip.
-3. **plan** — concrete architecture, file list, sequence, risks.
-4. **execute** — build, write, implement, deploy, produce.
-5. **test** — verify every done-criterion with evidence. Required if user-facing output exists.
-6. **red_team** — actively try to break it. Skip for pure-reasoning answers.
-7. **iterate** — root-cause diagnose, replan on failure. Max 3 cycles.
-8. **analyze** — deep reasoning; for analysis missions with no build phase.
-9. **synthesize** — combine prior outputs into final deliverable.
-
-### Session IDs
-
-Pick a stable, unique slug per task. Use the same session_id for all phases.
-Convention: `{task-slug}-{YYYYMMDD}`. Example: `build-payment-flow-20260615`.
-
-### Context isolation
-
-Only the `output` field from each closed phase carries forward. This is what makes harness resumable across context resets — outputs are persisted to disk and re-injectable on state query.
-
-### Override data path
+The original Python harness (`harness.py`) is in [`legacy/`](./legacy/). Zero dependencies, requires only Python 3.7+.
 
 ```bash
-HARNESS_DATA=/your/custom/path python ~/.agent-harness/harness.py '...'
+# Python harness — lightweight, single-file
+curl -fsSL https://raw.githubusercontent.com/PLEE93/agent-harness/main/legacy/harness.py \
+  -o ~/.agent-harness/harness.py
+python ~/.agent-harness/harness.py '{"action": "state", "session_id": "test"}'
 ```
 
-### State is local
-
-`~/.agent-harness/sessions/{session_id}/`. No network calls. No auth. Pure filesystem. `reset` archives, never deletes.
-
----
-
-## ANTI-PATTERNS
-
-- Answering a COMPLEX task without committing a plan first
-- Calling `commit_step_output` before `commit_plan`
-- Putting prose in `output` instead of structured fields matching `output_contract`
-- Declaring done without a `test` phase that verified every done-criterion
-- Switching tools when something fails instead of diagnosing root cause first
-- Using the same session_id for two different tasks
-- Padding plans with phases that serve no failure-prevention purpose
+Same harness semantics. No CLI. No modes. Use it when you want a single Python file with no build step.
 
 ---
 
@@ -249,10 +255,6 @@ HARNESS_DATA=/your/custom/path python ~/.agent-harness/harness.py '...'
 
 Built as the execution backbone of the [Aurelius](https://github.com/PLEE93) autonomous agent system. Open-sourced for any terminal-based AI agent.
 
-Requires Python 3.7+. No external dependencies. ~220 lines.
-
-State stored at `~/.agent-harness/sessions/`. No network, no auth.
-
 ---
 
-*This README is written as an AI-executable prompt. The install steps are bash commands your agent runs. Humans can read it too — it's just more direct.*
+*This README is written as an AI-executable prompt. Install and test steps are bash commands your agent runs directly.*

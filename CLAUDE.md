@@ -1,11 +1,14 @@
 ## HARNESS — Autonomous Execution State Machine
 
-harness.py is installed at `~/.agent-harness/harness.py`.
-Call it via bash with JSON params:
+`cc-harness` is installed. Call it via bash:
 
 ```bash
-python ~/.agent-harness/harness.py '<JSON>'
+cc-harness run "<goal>" --mode <mode>
 ```
+
+If not globally linked: `node ~/.agent-harness/dist/cli/index.js run "<goal>" --mode <mode>`
+
+---
 
 ### CLASSIFY EVERY INCOMING TASK
 
@@ -15,74 +18,68 @@ python ~/.agent-harness/harness.py '<JSON>'
 
 When in doubt → COMPLEX.
 
-### FOR COMPLEX TASKS: COMMIT THE PLAN FIRST (before any other action)
+---
+
+### FOR COMPLEX TASKS: PICK A MODE AND RUN
 
 ```bash
-python ~/.agent-harness/harness.py '{
-  "action": "commit_plan",
-  "session_id": "task-slug-YYYYMMDD",
-  "mission_summary": "one sentence: what the user observably gets when done",
-  "steps": [
-    {
-      "name": "understand_scope",
-      "type": "understand",
-      "objective": "lock done-criteria and failure modes",
-      "output_contract": "{scope, done_criteria, risks}",
-      "max_tool_calls": 6
-    },
-    {
-      "name": "execute_build",
-      "type": "execute",
-      "objective": "implement the solution",
-      "output_contract": "{files_written, result}",
-      "max_tool_calls": 20
-    },
-    {
-      "name": "verify",
-      "type": "test",
-      "objective": "confirm every done-criterion is met with evidence",
-      "output_contract": "{criteria_checked, pass_fail, evidence}",
-      "max_tool_calls": 8
-    }
-  ]
-}'
+# Standard: plan → execute → verify (bounded tasks, single pass)
+cc-harness run "<goal>" --mode standard
+
+# Standard-High: stronger planning + self-sweep before verify
+cc-harness run "<goal>" --mode standard-high
+
+# Autonomous: loop until done or blocked (open-ended work)
+cc-harness run "<goal>" --mode autonomous
+
+# Autonomous-High: autonomous + stronger planning + self-sweep
+cc-harness run "<goal>" --mode autonomous-high
 ```
 
-### CLOSE EACH PHASE WHEN DONE
+Add `--verbose` to see phase-by-phase output. Add `--dry-run` to plan without executing.
+
+---
+
+### MULTI-MODEL
 
 ```bash
-python ~/.agent-harness/harness.py '{
-  "action": "commit_step_output",
-  "session_id": "task-slug-YYYYMMDD",
-  "step_name": "understand_scope",
-  "output": {
-    "scope": "...",
-    "done_criteria": ["criterion 1", "criterion 2"],
-    "risks": ["risk 1"]
-  },
-  "next_action": "continue"
-}'
+# Default: uses claude CLI
+cc-harness run "<goal>" --mode standard
+
+# Specific Claude model
+cc-harness run "<goal>" --mode standard --model claude-opus-4-5
+
+# With Codex (enable first)
+cc-harness adapters enable codex
+cc-harness run "<goal>" --mode standard --with codex
 ```
 
-`next_action`: `continue` (advance) | `revise` (replan) | `done` (mission complete)
+Per-seat model config via `cc-harness.config.yaml` in project root:
+```yaml
+models:
+  planner: claude
+  executor: codex
+  verifier: claude
+```
 
-### PHASE TYPES
+---
 
-`understand` `research` `plan` `execute` `test` `red_team` `iterate` `analyze` `synthesize`
+### SESSION MANAGEMENT
 
-### STEP SCHEMA (required fields)
+```bash
+cc-harness resume <session-id>   # resume after interruption
+cc-harness state <session-id>    # check current phase
+cc-harness doctor                # check prerequisites
+```
 
-- `name` — slug, max 60 chars, unique in plan
-- `type` — one of the types above
-- `objective` — one sentence
-- `output_contract` — what structured data you emit when closing
+Sessions at `.cc-harness/sessions/<id>/` — local, no cloud, resumable anytime.
 
-Optional: `context_load` (list), `tools_allowed` (list), `max_tool_calls` (int, default 12)
+---
 
 ### RULES
 
-- Max 9 steps per plan
-- DO NOT declare done until every done-criterion from `understand` is verified in a `test` phase
-- Any failure: diagnose root cause before switching tools or retrying
-- Only `output` from each closed phase carries to the next; raw intermediate state is released
-- Reset a session: `python ~/.agent-harness/harness.py '{"action": "reset", "session_id": "..."}'`
+- COMPLEX task → use harness. Not optional.
+- The harness handles planning, phase commits, output carry-forward, and resumability.
+- Do not declare done until `verdict.json` shows `status: complete`.
+- Any failure: diagnose root cause before retrying. No tool-switching without diagnosis.
+- Sessions survive context resets — `cc-harness resume <id>` picks up mid-phase.
