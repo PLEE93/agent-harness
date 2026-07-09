@@ -3,6 +3,7 @@ description: Higher-stakes single pass with dedicated planning and self-sweep be
 phases:
   - name: understand
     type: understand
+    cognition: exec_decision_memo
     model: planner          # high-tier model alias fills this seat
     max_turns: 20
     output_contract:
@@ -11,6 +12,7 @@ phases:
 
   - name: plan
     type: plan
+    cognition: exec_decision_memo
     model: planner
     max_turns: 20
     handoff_in: understand
@@ -20,6 +22,7 @@ phases:
 
   - name: execute
     type: execute
+    cognition: senior_engineer_debug
     model: executor         # caller by default
     max_turns: 40
     handoff_in: plan
@@ -29,6 +32,7 @@ phases:
 
   - name: self_sweep
     type: analyze
+    cognition: code_review
     model: planner          # high-tier reviews own work
     max_turns: 20
     handoff_in: execute
@@ -38,6 +42,7 @@ phases:
 
   - name: verify
     type: test
+    cognition: code_review
     model: verifier
     max_turns: 20
     handoff_in: [execute, self_sweep]

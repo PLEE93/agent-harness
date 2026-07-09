@@ -11,6 +11,7 @@ export interface ExecuteParams {
   readonly handoff?: object;
   readonly model?: string;
   readonly max_turns?: number;
+  readonly max_tool_calls?: number;
   readonly working_dir?: string;
   readonly permissionMode?: PermissionMode;
   readonly session_id: string;

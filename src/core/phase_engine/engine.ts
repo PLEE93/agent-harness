@@ -12,9 +12,10 @@ import {
   writePlan,
 } from "../ledger/plan";
 import { createInitialState, type StateFile, updateState, writeState } from "../ledger/state";
-import { createSession, createSessionRecord, type SessionRecord, writeOutput, writeTextFile } from "../ledger/session";
+import { createSession, createSessionRecord, type SessionRecord, writeJsonFile, writeOutput, writeTextFile } from "../ledger/session";
 import { createVerdict, type VerdictFile, type VerdictStatus, writeVerdict } from "../ledger/verdict";
 import { resolveModelSeat } from "./cognition";
+import { resolveCognitionPack } from "./cognition_packs";
 import { validatePhaseOutput } from "./output_validator";
 import { buildHandoffPacket, type HandoffPacket, writeHandoffPacket } from "./prior_output_injector";
 import { runPhase } from "./phase_runner";
@@ -137,16 +138,41 @@ export class PhaseEngine {
       const handoff = appendLoopHandoff(baseHandoff, loopOutputs.get(phase.name));
       const adapter = this.selectAdapter(phase);
       const model = resolveModelSeat(phase.model_seat, this.options.primaryModel ?? "caller", this.options.modelAliases).resolved;
+      const prompt = buildPhasePrompt(plan, phase, handoff);
+      const traceDir = path.join(session.paths.traces, phase.name);
+      await writeTextFile(path.join(traceDir, "prompt.txt"), prompt);
+      if (handoff !== undefined) {
+        await writeJsonFile(path.join(traceDir, "handoff.json"), handoff);
+      }
+      await writeJsonFile(path.join(traceDir, "adapter_invocation.json"), {
+        adapter: adapter.name,
+        model,
+        model_seat: phase.model_seat,
+        max_turns: phase.max_turns ?? null,
+        max_tool_calls: phase.max_tool_calls ?? null,
+        permission_mode: this.options.permissionMode ?? "ask",
+      });
+      const startedAt = Date.now();
       const result = await runPhase({
         adapter,
         phase,
-        prompt: buildPhasePrompt(plan, phase, handoff),
+        prompt,
         handoff,
         model,
         sessionId: session.sessionId,
         workingDir: workspaceRoot,
         permissionMode: this.options.permissionMode ?? "ask",
       });
+      const endedAt = Date.now();
+      await writeJsonFile(path.join(traceDir, "timing.json"), {
+        started_at_ms: startedAt,
+        ended_at_ms: endedAt,
+        duration_ms: endedAt - startedAt,
+      });
+      await writeJsonFile(path.join(traceDir, "parsed_output.json"), result.output);
+      if (result.raw_transcript !== undefined) {
+        await writeTextFile(path.join(traceDir, "raw_transcript.jsonl"), `${result.raw_transcript}\n`);
+      }
 
       await appendEvent(session.paths.events, {
         level: result.status === "complete" ? "info" : "error",
@@ -157,6 +183,7 @@ export class PhaseEngine {
           status: result.status,
           error: result.error ?? null,
           raw_transcript_present: result.raw_transcript !== undefined,
+          trace_path: traceDir,
         },
       });
 
@@ -166,6 +193,7 @@ export class PhaseEngine {
       }
 
       const validation = validatePhaseOutput(phase.output_contract, result.output);
+      await writeJsonFile(path.join(traceDir, "validation.json"), validation);
       if (!validation.valid) {
         const error = `phase '${phase.name}' output failed contract: ${validation.failures.join("; ")}`;
         state = updateState(state, {
@@ -342,6 +370,7 @@ export class PhaseEngine {
     });
     await writeVerdict(session.paths.verdict, verdict);
     await writeTextFile(session.paths.summary, `${summary}\n`);
+    await appendRunIndex(session, plan, status, phasesCompleted, artifacts, summaryDetail);
     await appendEvent(session.paths.events, {
       level: status === "complete" ? "info" : "error",
       type: "verdict_written",
@@ -386,6 +415,14 @@ export function buildPhasePrompt(plan: PlanFile, phase: WorkflowPhase, handoff: 
     `**Mode:** ${plan.mode}`,
     `**Your objective:** ${phase.objective ?? phase.name}`,
     "",
+  ];
+
+  const cognition = resolveCognitionPack(phase.cognition);
+  if (cognition !== undefined) {
+    lines.push(`**Cognition pack:** ${cognition.name}`, "```text", cognition.body, "```", "");
+  }
+
+  lines.push(
     "**Output contract (return ONLY this JSON, no prose outside the JSON block):**",
     "```json",
     JSON.stringify(phase.output_contract ?? {}, null, 2),
@@ -396,7 +433,7 @@ export function buildPhasePrompt(plan: PlanFile, phase: WorkflowPhase, handoff: 
     "**When blocked:** return {\"status\": \"blocked\", \"error\": \"<reason>\", \"open_questions\": [\"...\"]}",
     "",
     "**Handoff JSON:** when prior phase data is supplied below, use it as context and still return only the output contract JSON.",
-  ];
+  );
 
   if (phase.loop_until !== undefined) {
     lines.push(
@@ -451,6 +488,60 @@ function clampPhaseIndex(index: number, phaseCount: number): number {
     return 0;
   }
   return Math.min(Math.max(index, 0), phaseCount);
+}
+
+
+async function appendRunIndex(
+  session: SessionRecord,
+  plan: PlanFile,
+  status: VerdictStatus,
+  phasesCompleted: string[],
+  artifacts: string[],
+  detail: string,
+): Promise<void> {
+  const indexRoot = path.resolve(session.paths.root, "..", "..", "index");
+  const record = {
+    session_id: plan.session_id,
+    goal: plan.goal,
+    mode: plan.mode,
+    status,
+    phases_completed: phasesCompleted,
+    artifacts,
+    detail,
+    recorded_at: new Date().toISOString(),
+  };
+  await appendJsonl(path.join(indexRoot, "sessions.jsonl"), record);
+
+  if (status !== "complete") {
+    await appendJsonl(path.join(indexRoot, "failures.jsonl"), {
+      ...record,
+      failure_type: classifyFailure(detail),
+    });
+  }
+}
+
+async function appendJsonl(filePath: string, value: object): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.appendFile(filePath, `${JSON.stringify(value)}\n`, "utf8");
+}
+
+function classifyFailure(detail: string): string {
+  if (/contract|missing required key|validation/i.test(detail)) {
+    return "contract_violation";
+  }
+  if (/rate.?limit|quota|too many requests|429/i.test(detail)) {
+    return "rate_limited";
+  }
+  if (/auth|login|credential|api key|unauthorized/i.test(detail)) {
+    return "auth_blocked";
+  }
+  if (/loop_until|loop limit/i.test(detail)) {
+    return "loop_limit_reached";
+  }
+  if (/not found|executable|spawn|adapter/i.test(detail)) {
+    return "adapter_failure";
+  }
+  return "verification_failed";
 }
 
 function buildSummary(plan: PlanFile, status: VerdictStatus, phasesCompleted: string[], detail: string): string {

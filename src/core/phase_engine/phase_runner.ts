@@ -18,6 +18,7 @@ export async function runPhase(params: PhaseRunnerParams): Promise<ExecuteResult
     handoff: params.handoff,
     model: params.model,
     max_turns: params.phase.max_turns,
+    max_tool_calls: params.phase.max_tool_calls,
     working_dir: params.workingDir,
     permissionMode: params.permissionMode,
     session_id: params.sessionId,

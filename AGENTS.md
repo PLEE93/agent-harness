@@ -43,13 +43,19 @@ cc-harness run "<goal>" --mode autonomous-high --with codex
 Create `cc-harness.config.yaml` in project root:
 
 ```yaml
-models:
-  planner: claude
-  executor: codex
-  verifier: claude
+seats:
+  planner:
+    adapter: claude-code
+    model: claude-opus-4-5
+  executor:
+    adapter: codex
+    model: gpt-5-codex
+  verifier:
+    adapter: claude-code
+    model: claude-opus-4-5
 ```
 
-Then run without `--with` — the config routes each phase to the right model:
+Then run without `--with` so the config routes each phase seat to its adapter and model:
 ```bash
 cc-harness run "<goal>" --mode standard-high
 ```

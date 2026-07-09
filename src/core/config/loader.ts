@@ -16,8 +16,14 @@ export interface HarnessAdapterConfig {
   readonly [key: string]: unknown;
 }
 
+export interface HarnessSeatConfig {
+  readonly adapter?: string;
+  readonly model?: string;
+}
+
 export interface HarnessConfig {
   readonly models: HarnessModelConfig;
+  readonly seats: Record<string, HarnessSeatConfig>;
   readonly adapters: Record<string, HarnessAdapterConfig>;
   readonly permissions: {
     readonly default: PermissionMode;
@@ -35,8 +41,15 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
     executor: "caller",
     verifier: "caller",
   },
+  seats: {
+    caller: { adapter: "claude-code", model: "caller" },
+    planner: { adapter: "claude-code", model: "caller" },
+    executor: { adapter: "claude-code", model: "caller" },
+    verifier: { adapter: "claude-code", model: "caller" },
+  },
   adapters: {
     claude: { command: "claude" },
+    "claude-code": { command: "claude" },
     codex: { command: "codex" },
   },
   permissions: {
@@ -84,6 +97,10 @@ function mergeConfig(base: HarnessConfig, override: PartialHarnessConfig): Harne
       ...base.models,
       ...override.models,
     },
+    seats: {
+      ...base.seats,
+      ...override.seats,
+    },
     adapters: {
       ...base.adapters,
       ...override.adapters,
@@ -99,6 +116,7 @@ function mergeConfig(base: HarnessConfig, override: PartialHarnessConfig): Harne
 
 interface PartialHarnessConfig {
   readonly models?: Record<string, string>;
+  readonly seats?: Record<string, HarnessSeatConfig>;
   readonly adapters?: Record<string, HarnessAdapterConfig>;
   readonly permissions?: {
     readonly default?: PermissionMode;
@@ -118,6 +136,7 @@ function parseConfigObject(value: unknown, configPath: string): PartialHarnessCo
 
   return {
     models: parseStringMap(value.models, "models", configPath),
+    seats: parseSeatMap(value.seats, configPath),
     adapters: parseAdapterMap(value.adapters, configPath),
     permissions: parsePermissions(value.permissions, configPath),
     modes: parseModes(value.modes, configPath),
@@ -138,6 +157,30 @@ function parseStringMap(value: unknown, field: string, configPath: string): Reco
       throw new Error(`config '${configPath}' field '${field}.${key}' must be a string`);
     }
     parsed[key] = item;
+  }
+  return parsed;
+}
+
+function parseSeatMap(value: unknown, configPath: string): Record<string, HarnessSeatConfig> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error(`config '${configPath}' field 'seats' must be an object`);
+  }
+
+  const parsed: Record<string, HarnessSeatConfig> = {};
+  for (const [seatName, item] of Object.entries(value)) {
+    if (!isRecord(item)) {
+      throw new Error(`config '${configPath}' field 'seats.${seatName}' must be an object`);
+    }
+    if (item.adapter !== undefined && typeof item.adapter !== "string") {
+      throw new Error(`config '${configPath}' field 'seats.${seatName}.adapter' must be a string`);
+    }
+    if (item.model !== undefined && typeof item.model !== "string") {
+      throw new Error(`config '${configPath}' field 'seats.${seatName}.model' must be a string`);
+    }
+    parsed[seatName] = { adapter: item.adapter, model: item.model };
   }
   return parsed;
 }

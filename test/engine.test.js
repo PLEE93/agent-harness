@@ -146,3 +146,61 @@ test('PhaseEngine treats non-object output as validation failure without throwin
   assert.match(run.verdict.summary, /phase output must be a JSON object/);
   assert.equal(run.plan.phases.find((phase) => phase.name === 'plan').status, 'failed');
 });
+
+
+test('PhaseEngine injects cognition packs and writes phase flight recorder artifacts', async () => {
+  const workspaceRoot = await makeWorkspace('trace');
+  const sessionId = 'trace-session';
+  const workflowPath = path.join(workspaceRoot, 'trace-mode.yaml');
+  await require('node:fs/promises').writeFile(workflowPath, `mode: trace
+phases:
+  - name: diagnose
+    type: analyze
+    model: planner
+    cognition: senior_engineer_debug
+    max_turns: 7
+    max_tool_calls: 11
+    output_contract:
+      result: string
+      artifacts: [string]
+`, 'utf8');
+
+  const adapter = new FakeAdapter({
+    responses: [response('diagnose', FakeAdapter.complete({ result: 'fixed', artifacts: ['a.txt'] }))],
+  });
+  const engine = new PhaseEngine({
+    sessionId,
+    mode: 'trace',
+    goal: 'trace the phase',
+    workspaceRoot,
+    workflowPath,
+    primaryModel: 'caller',
+    modelAliases: { planner: 'claude-opus-4-5' },
+    adapter,
+  });
+
+  try {
+    const result = await engine.run();
+    const traceRoot = path.join(workspaceRoot, '.cc-harness', 'sessions', sessionId, 'traces', 'diagnose');
+    const prompt = await readFile(path.join(traceRoot, 'prompt.txt'), 'utf8');
+    const invocation = await readJson(path.join(traceRoot, 'adapter_invocation.json'));
+    const validation = await readJson(path.join(traceRoot, 'validation.json'));
+    const parsed = await readJson(path.join(traceRoot, 'parsed_output.json'));
+    const timing = await readJson(path.join(traceRoot, 'timing.json'));
+    const raw = await readFile(path.join(traceRoot, 'raw_transcript.jsonl'), 'utf8');
+
+    assert.equal(result.status, 'complete');
+    assert.match(prompt, /Cognition pack:\*\* senior_engineer_debug/);
+    assert.match(prompt, /Use hypothesis isolation before editing/);
+    assert.equal(invocation.adapter, 'fake');
+    assert.equal(invocation.model, 'claude-opus-4-5');
+    assert.equal(invocation.max_turns, 7);
+    assert.equal(invocation.max_tool_calls, 11);
+    assert.equal(validation.valid, true);
+    assert.deepEqual(parsed, { result: 'fixed', artifacts: ['a.txt'] });
+    assert.equal(typeof timing.duration_ms, 'number');
+    assert.match(raw, /fixed/);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});

@@ -5,7 +5,7 @@ import { Command } from "commander";
 import { ClaudeCodeAdapter } from "../../adapters/claude-code/adapter";
 import { CodexAdapter } from "../../adapters/codex/adapter";
 import type { Adapter, PermissionMode } from "../../adapters/base";
-import { loadConfig } from "../../core/config/loader";
+import { loadConfig, type HarnessConfig } from "../../core/config/loader";
 import { PhaseEngine } from "../../core/phase_engine/engine";
 
 interface RunOptions {
@@ -48,13 +48,16 @@ export async function runHarness(goal: string, options: RunOptions): Promise<voi
   const primaryModel = options.model ?? "claude";
   const permissionMode = parsePermissionMode(options.permissionMode ?? config.permissions.default);
   const workflowPath = await resolveWorkflowPath(mode);
-  const adapter = createAdapter(options.with, config.adapters.codex?.command);
+  const adapters = createSeatAdapters(config, options.with);
+  const adapter = adapters.caller ?? createAdapter("claude-code", config);
+  const modelAliases = createModelAliases(config);
 
   if (options.dryRun === true) {
     console.log(`Dry run: ${goal}`);
     console.log(`Mode: ${mode}`);
     console.log(`Model: ${primaryModel}`);
     console.log(`Adapter: ${adapter.name}`);
+    console.log(`Seat adapters: ${describeSeatAdapters(adapters)}`);
     console.log(`Permission mode: ${permissionMode}`);
     console.log(`Workflow: ${workflowPath}`);
     return;
@@ -65,6 +68,7 @@ export async function runHarness(goal: string, options: RunOptions): Promise<voi
   console.log(`Mode: ${mode}`);
   console.log(`Model: ${primaryModel}`);
   console.log(`Adapter: ${adapter.name}`);
+  console.log(`Seat adapters: ${describeSeatAdapters(adapters)}`);
   console.log(`Permission mode: ${permissionMode}`);
   console.log(`Ledger: ${path.join(".cc-harness", "sessions", sessionId)}`);
 
@@ -75,9 +79,10 @@ export async function runHarness(goal: string, options: RunOptions): Promise<voi
     workspaceRoot,
     workflowPath,
     primaryModel,
-    modelAliases: config.models,
+    modelAliases,
     permissionMode,
     adapter,
+    adapters,
   });
 
   const result = await engine.run();
@@ -115,17 +120,46 @@ export async function resolveWorkflowPath(mode: string): Promise<string> {
   );
 }
 
-function createAdapter(adapterName: string | undefined, codexCommand: string | undefined): Adapter {
+export function createAdapter(adapterName: string | undefined, config: HarnessConfig): Adapter {
   const requested = adapterName ?? "claude-code";
   switch (requested) {
     case "claude":
     case "claude-code":
       return new ClaudeCodeAdapter();
     case "codex":
-      return new CodexAdapter({ command: codexCommand });
+      return new CodexAdapter({ command: config.adapters.codex?.command });
     default:
       throw new Error(`unknown adapter '${requested}'. Supported adapters: claude-code, codex`);
   }
+}
+
+function createSeatAdapters(config: HarnessConfig, forcedAdapterName: string | undefined): Record<string, Adapter> {
+  const adapters: Record<string, Adapter> = {};
+  const seatEntries = Object.entries(config.seats);
+  for (const [seat, seatConfig] of seatEntries) {
+    adapters[seat] = createAdapter(forcedAdapterName ?? seatConfig.adapter ?? "claude-code", config);
+  }
+  if (adapters.caller === undefined) {
+    adapters.caller = createAdapter(forcedAdapterName ?? "claude-code", config);
+  }
+  return adapters;
+}
+
+function createModelAliases(config: HarnessConfig): Record<string, string> {
+  const aliases: Record<string, string> = { ...config.models };
+  for (const [seat, seatConfig] of Object.entries(config.seats)) {
+    if (seatConfig.model !== undefined && seatConfig.model.trim().length > 0) {
+      aliases[seat] = seatConfig.model;
+    }
+  }
+  return aliases;
+}
+
+function describeSeatAdapters(adapters: Record<string, Adapter>): string {
+  return Object.entries(adapters)
+    .map(([seat, adapter]) => `${seat}=${adapter.name}`)
+    .sort()
+    .join(", ");
 }
 
 function parsePermissionMode(value: string): PermissionMode {

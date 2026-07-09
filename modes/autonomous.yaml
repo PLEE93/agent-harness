@@ -3,6 +3,7 @@ description: Caller-preserving execution loop — runs until done or blocked
 phases:
   - name: understand
     type: understand
+    cognition: exec_decision_memo
     model: caller
     max_turns: 20
     output_contract:
@@ -11,6 +12,7 @@ phases:
 
   - name: execute
     type: execute
+    cognition: senior_engineer_debug
     model: caller
     max_turns: 80
     handoff_in: understand
@@ -24,6 +26,7 @@ phases:
 
   - name: verify
     type: test
+    cognition: code_review
     model: caller
     max_turns: 20
     handoff_in: execute

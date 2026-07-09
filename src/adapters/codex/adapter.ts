@@ -67,6 +67,10 @@ export function buildCodexPrompt(params: ExecuteParams): string {
     sections.push("", `Phase turn budget: ${params.max_turns}`);
   }
 
+  if (params.max_tool_calls !== undefined) {
+    sections.push("", `Phase tool-call budget: ${params.max_tool_calls}`);
+  }
+
   if (params.handoff !== undefined && !params.prompt.includes("Handoff packet:")) {
     sections.push("", `Handoff packet: ${JSON.stringify(params.handoff, null, 2)}`);
   }

@@ -15,9 +15,13 @@ Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local f
 - Codex adapter via the local `codex` CLI (`cc-harness run --with codex`); PATH availability is checked at runtime and a missing CLI fails honestly instead of crashing
 - Local session ledger: `plan.json`, `state.json`, `events.jsonl`, phase outputs, handoffs, and `verdict.json`
 - Output contracts and structured handoff packets between phases
-- Config file loading from `cc-harness.config.yaml` (falls back to `~/.agent-harness/cc-harness.config.yaml`, then built-in defaults) for default mode, default permission mode, and per-phase model aliases
+- Explicit `seats:` config for per-phase adapter + model routing, e.g. Claude planning, Codex execution, Claude verification
+- Config file loading from `cc-harness.config.yaml` (falls back to `~/.agent-harness/cc-harness.config.yaml`, then built-in defaults) for default mode, default permission mode, per-phase model aliases, and per-seat adapters
+- Built-in cognition packs injected into phase prompts (`senior_engineer_debug`, `epistemic_research`, `exec_decision_memo`, `code_review`, `refactor_safe`)
+- Per-phase flight recorder under each session: prompt, adapter invocation, handoff, raw transcript, parsed output, validation, and timing
+- Local run index under `.cc-harness/index/` for sessions and classified failures
 - `standard-high`, `autonomous`, and `autonomous-high` mode YAMLs are bundled in `modes/` and `src/modes/` and resolve via `--mode <name>` (package-relative resolution, verified from a directory outside the project); the engine executes phase types generically, so all four modes run through the same engine/config/adapter wiring as `standard`
-- Deterministic JavaScript test suite: `npm test` (14 tests, fake adapter only, no live CLI calls)
+- Deterministic JavaScript test suite: `npm test` (16 tests, fake adapter only, no live CLI calls)
 - `cc-harness run "<goal>" --mode standard`
 - `cc-harness run "<goal>" --mode <any bundled mode> --dry-run`
 - `cc-harness doctor`
@@ -29,7 +33,8 @@ Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local f
 ## In Progress
 
 - Live, end-to-end verified runs of `standard-high`, `autonomous`, and `autonomous-high` against a real Claude/Codex model — the YAML, engine, config, and CLI wiring is in place, but a full multi-turn run (including `self_sweep` and `loop_until` phases) has not been exercised outside this repo's deterministic, live-CLI-free test gate
-- Per-phase model alias overrides in a live run — `planner`/`executor`/`verifier` seats resolve through `cc-harness.config.yaml`, but multi-model routing has only been verified at the source/config level, not in a live multi-model session
+- Live per-seat mixed-adapter runs — `planner`/`executor`/`verifier` seats now select adapters and models from `cc-harness.config.yaml`, but the deterministic test gate still does not invoke real Claude/Codex processes
+- Agent-quality eval command and benchmark suite — deterministic tests prove engine behavior, but the repo still does not yet prove harnessed agents outperform raw model use
 - Project-level mode overrides at `.cc-harness/modes/<mode>.yaml` — the resolution chain supports it, but it is not covered by the deterministic test suite
 
 ---
@@ -155,6 +160,47 @@ cc-harness adapters enable codex
 Uses the local `codex` CLI via `CodexAdapter`. Availability is checked on PATH; if Codex is not installed, `--with codex` fails honestly instead of crashing. `adapters enable codex` checks the same availability and prints an install hint when the CLI is missing.
 
 ---
+
+## Per-Seat Routing
+
+Use `seats:` when planning, execution, and verification should run on different adapters or models:
+
+```yaml
+seats:
+  planner:
+    adapter: claude-code
+    model: claude-opus-4-5
+  executor:
+    adapter: codex
+    model: gpt-5-codex
+  verifier:
+    adapter: claude-code
+    model: claude-opus-4-5
+```
+
+Workflow phases select a seat through their `model:` field. `--with <adapter>` is an override that forces every seat through one adapter for that run.
+
+## Phase Flight Recorder
+
+Every phase writes debug artifacts under `.cc-harness/sessions/<id>/traces/<phase>/`:
+
+```text
+prompt.txt
+handoff.json
+adapter_invocation.json
+raw_transcript.jsonl
+parsed_output.json
+validation.json
+timing.json
+```
+
+This is the debugging layer above `events.jsonl`: it shows what was asked, which adapter/model ran, what came back, how validation judged it, and how long it took.
+
+## Local Learning Index
+
+Every completed run appends a compact record to `.cc-harness/index/sessions.jsonl`. Failed or blocked runs also append to `.cc-harness/index/failures.jsonl` with a basic failure type such as `contract_violation`, `rate_limited`, `auth_blocked`, `loop_limit_reached`, `adapter_failure`, or `verification_failed`.
+
+This is not yet a full prompt-patch/eval feedback loop, but it gives the harness a local data layer that future evals and learning tools can mine.
 
 ## Commands
 

@@ -3,6 +3,7 @@ description: Multi-seat workflow with explicit handoffs
 phases:
   - name: plan
     type: plan
+    cognition: exec_decision_memo
     model: planner          # alias: defaults to caller
     max_turns: 20
     output_contract:
@@ -11,6 +12,7 @@ phases:
 
   - name: execute
     type: execute
+    cognition: senior_engineer_debug
     model: executor         # alias: defaults to caller
     max_turns: 40
     handoff_in: plan
@@ -20,6 +22,7 @@ phases:
 
   - name: verify
     type: test
+    cognition: code_review
     model: verifier         # alias: defaults to caller
     max_turns: 20
     handoff_in: execute

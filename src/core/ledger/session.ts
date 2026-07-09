@@ -8,6 +8,7 @@ export interface SessionPaths {
   readonly events: string;
   readonly outputs: string;
   readonly handoffs: string;
+  readonly traces: string;
   readonly artifacts: string;
   readonly verdict: string;
   readonly summary: string;
@@ -38,6 +39,7 @@ export function getSessionPaths(workspaceRoot: string, sessionId: string): Sessi
     events: path.join(root, "events.jsonl"),
     outputs: path.join(root, "outputs"),
     handoffs: path.join(root, "handoffs"),
+    traces: path.join(root, "traces"),
     artifacts: path.join(root, "artifacts"),
     verdict: path.join(root, "verdict.json"),
     summary: path.join(root, "summary.md"),
@@ -48,6 +50,7 @@ export async function createSession(options: CreateSessionOptions): Promise<Sess
   const record = createSessionRecord(options.sessionId, options.workspaceRoot);
   await fs.mkdir(record.paths.outputs, { recursive: true });
   await fs.mkdir(record.paths.handoffs, { recursive: true });
+  await fs.mkdir(record.paths.traces, { recursive: true });
   await fs.mkdir(record.paths.artifacts, { recursive: true });
   await ensureFile(record.paths.events, "");
   await writeTextFile(record.paths.summary, options.summary ?? "");

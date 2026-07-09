@@ -3,6 +3,7 @@ description: Autonomous loop with dedicated planning and self-sweep seats
 phases:
   - name: understand
     type: understand
+    cognition: exec_decision_memo
     model: planner
     max_turns: 20
     output_contract:
@@ -11,6 +12,7 @@ phases:
 
   - name: plan
     type: plan
+    cognition: exec_decision_memo
     model: planner
     max_turns: 20
     handoff_in: understand
@@ -20,6 +22,7 @@ phases:
 
   - name: execute
     type: execute
+    cognition: senior_engineer_debug
     model: caller
     max_turns: 80
     handoff_in: plan
@@ -33,6 +36,7 @@ phases:
 
   - name: self_sweep
     type: analyze
+    cognition: code_review
     model: planner
     max_turns: 20
     handoff_in: execute
@@ -42,6 +46,7 @@ phases:
 
   - name: verify
     type: test
+    cognition: code_review
     model: verifier
     max_turns: 20
     handoff_in: [execute, self_sweep]
