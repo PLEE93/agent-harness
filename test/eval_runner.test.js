@@ -28,8 +28,9 @@ test('runHarnessEval reports deterministic cases, baseline comparisons, and mine
     assert.equal(report.status, 'pass');
     assert.equal(report.failed_cases, 0);
     assert.equal(report.generated_failure_cases, 1);
-    assert.equal(report.baseline_comparisons.length, 3);
+    assert.equal(report.baseline_comparisons.length, 4);
     assert.deepEqual(new Set(report.baseline_comparisons.map((item) => item.winner)), new Set(['harness']));
+    assert.ok(report.baseline_comparisons.some((item) => item.id === 'failure-memory-vs-anecdotes'));
     assert.ok(report.quality_claims.some((claim) => /baseline comparison/.test(claim.claim) && claim.status === 'pass'));
 
     const generated = await readFile(path.join(workspaceRoot, '.cc-harness', 'evals', 'generated', 'failures.jsonl'), 'utf8');
