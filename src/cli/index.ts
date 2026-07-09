@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { registerAdaptersCommand } from "./commands/adapters";
 import { registerDoctorCommand } from "./commands/doctor";
+import { registerEvalCommand } from "./commands/eval";
 import { registerResumeCommand } from "./commands/resume";
 import { registerRunCommand } from "./commands/run";
 import { registerStateCommand } from "./commands/state";
@@ -22,6 +23,7 @@ export function buildCli(): Command {
   registerStateCommand(program);
   registerAdaptersCommand(program);
   registerDoctorCommand(program);
+  registerEvalCommand(program);
 
   return program;
 }

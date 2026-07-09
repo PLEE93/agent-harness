@@ -81,6 +81,7 @@ cc-harness run "<goal>" --mode standard-high
 cc-harness resume <session-id>   # resume after interruption
 cc-harness state <session-id>    # check current phase
 cc-harness doctor                # check prerequisites
+cc-harness eval                  # run deterministic harness-quality evals
 ```
 
 Sessions at `.cc-harness/sessions/<id>/` — local, no cloud, resumable anytime.
@@ -92,5 +93,6 @@ Sessions at `.cc-harness/sessions/<id>/` — local, no cloud, resumable anytime.
 - COMPLEX task → use harness. Not optional.
 - The harness handles planning, phase commits, output carry-forward, and resumability.
 - Do not declare done until `verdict.json` shows `status: complete`.
+- For harness changes, also run `cc-harness eval`; it writes deterministic quality evidence and mined failure cases under `.cc-harness/evals/`.
 - Any failure: diagnose root cause before retrying. No tool-switching without diagnosis.
 - Sessions survive context resets — `cc-harness resume <id>` picks up mid-phase.

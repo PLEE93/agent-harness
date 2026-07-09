@@ -20,8 +20,9 @@ Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local f
 - Built-in cognition packs injected into phase prompts (`senior_engineer_debug`, `epistemic_research`, `exec_decision_memo`, `code_review`, `refactor_safe`)
 - Per-phase flight recorder under each session: prompt, adapter invocation, handoff, raw transcript, parsed output, validation, and timing
 - Local run index under `.cc-harness/index/` for sessions and classified failures
+- `cc-harness eval` for deterministic harness-quality checks, baseline comparisons against raw-agent failure modes, and conversion of prior failure records into reusable eval case records
 - `standard-high`, `autonomous`, and `autonomous-high` mode YAMLs are bundled in `modes/` and `src/modes/` and resolve via `--mode <name>` (package-relative resolution, verified from a directory outside the project); the engine executes phase types generically, so all four modes run through the same engine/config/adapter wiring as `standard`
-- Deterministic JavaScript test suite: `npm test` (16 tests, fake adapter only, no live CLI calls)
+- Deterministic JavaScript test suite: `npm test` (17 tests, fake adapter only, no live CLI calls)
 - `cc-harness run "<goal>" --mode standard`
 - `cc-harness run "<goal>" --mode <any bundled mode> --dry-run`
 - `cc-harness doctor`
@@ -34,7 +35,7 @@ Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local f
 
 - Live, end-to-end verified runs of `standard-high`, `autonomous`, and `autonomous-high` against a real Claude/Codex model — the YAML, engine, config, and CLI wiring is in place, but a full multi-turn run (including `self_sweep` and `loop_until` phases) has not been exercised outside this repo's deterministic, live-CLI-free test gate
 - Live per-seat mixed-adapter runs — `planner`/`executor`/`verifier` seats now select adapters and models from `cc-harness.config.yaml`, but the deterministic test gate still does not invoke real Claude/Codex processes
-- Agent-quality eval command and benchmark suite — deterministic tests prove engine behavior, but the repo still does not yet prove harnessed agents outperform raw model use
+- Live benchmark suite comparing harnessed agents against raw model use on the same real tasks — `cc-harness eval` now proves deterministic quality properties and baseline failure prevention, but it does not yet run live model-vs-model benchmarks
 - Project-level mode overrides at `.cc-harness/modes/<mode>.yaml` — the resolution chain supports it, but it is not covered by the deterministic test suite
 
 ---
@@ -200,7 +201,25 @@ This is the debugging layer above `events.jsonl`: it shows what was asked, which
 
 Every completed run appends a compact record to `.cc-harness/index/sessions.jsonl`. Failed or blocked runs also append to `.cc-harness/index/failures.jsonl` with a basic failure type such as `contract_violation`, `rate_limited`, `auth_blocked`, `loop_limit_reached`, `adapter_failure`, or `verification_failed`.
 
-This is not yet a full prompt-patch/eval feedback loop, but it gives the harness a local data layer that future evals and learning tools can mine.
+`cc-harness eval` mines this failure index into `.cc-harness/evals/generated/failures.jsonl`. This is a reusable eval-case layer, not yet an automatic prompt-patch loop.
+
+## Harness Quality Evals
+
+Run:
+
+```bash
+cc-harness eval
+cc-harness eval --json
+```
+
+The eval command writes `.cc-harness/evals/latest-report.json` and checks:
+
+1. deterministic workflow behavior with the fake adapter,
+2. contract enforcement and safe blocking,
+3. loop retry behavior,
+4. phase flight-recorder artifacts,
+5. baseline comparisons showing where the harness blocks failures that a raw one-shot agent can miss,
+6. failure-index mining into reusable eval case records.
 
 ## Commands
 
@@ -220,6 +239,9 @@ cc-harness adapters enable codex
 
 # Diagnostics
 cc-harness doctor
+
+# Harness quality evals
+cc-harness eval [--json]
 ```
 
 The CLI accepts `--with <adapter>` set to `claude-code` (default) or `codex`; both are wired for execution. `fake` exists for internal deterministic tests only and is not a valid `--with` value on the CLI.
