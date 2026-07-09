@@ -32,6 +32,9 @@ function validVerifyOutput() {
   return {
     verdict: 'pass',
     evidence: ['artifact.txt exists'],
+    commands_run: [{ command: 'npm test', exit_code: 0, stdout_excerpt: 'pass' }],
+    files_checked: ['artifact.txt'],
+    residual_risk: [],
   };
 }
 
@@ -82,8 +85,14 @@ test('PhaseEngine completes standard mode with fake adapter responses', async ()
 
   assert.equal(run.result.status, 'complete');
   assert.equal(run.verdict.status, 'complete');
+  assert.equal(run.verdict.execution_status, 'complete');
+  assert.equal(run.verdict.verification_status, 'pass');
+  assert.equal(run.verdict.final_status, 'success');
   assert.deepEqual(run.verdict.phases_completed, ['plan', 'execute', 'verify']);
   assert.deepEqual(run.verdict.artifacts, ['artifact.txt']);
+  assert.equal(run.verdict.artifact_manifest[0].exists, true);
+  assert.equal(run.verdict.artifact_manifest[0].inside_workspace, true);
+  assert.equal(typeof run.verdict.artifact_manifest[0].sha256, 'string');
   assert.equal(run.adapter.remainingResponses(), 0);
 });
 
@@ -101,6 +110,63 @@ test('PhaseEngine stops blocked runs at the blocked phase', async () => {
   assert.equal(run.state.last_error, 'quota exhausted');
   assert.equal(run.plan.phases.find((phase) => phase.name === 'execute').status, 'blocked');
   assert.equal(run.adapter.remainingResponses(), 1);
+});
+
+test('PhaseEngine fails final status when verifier returns fail', async () => {
+  const run = await runEngine('verify-fail', [
+    response('plan', FakeAdapter.complete(validPlanOutput())),
+    response('execute', FakeAdapter.complete(validExecuteOutput(), ['artifact.txt'])),
+    response('verify', FakeAdapter.complete({
+      verdict: 'fail',
+      evidence: ['artifact is wrong'],
+      commands_run: [{ command: 'npm test', exit_code: 1, stdout_excerpt: 'failed' }],
+      files_checked: ['artifact.txt'],
+      residual_risk: ['needs fix'],
+    })),
+  ]);
+
+  assert.equal(run.result.status, 'failed');
+  assert.equal(run.verdict.status, 'failed');
+  assert.equal(run.verdict.execution_status, 'complete');
+  assert.equal(run.verdict.verification_status, 'fail');
+  assert.equal(run.verdict.final_status, 'failed_verification');
+  assert.deepEqual(run.verdict.phases_completed, ['plan', 'execute', 'verify']);
+});
+
+test('PhaseEngine rejects claimed artifacts that do not exist inside the workspace', async () => {
+  const workspaceRoot = await makeWorkspace('bad-artifact');
+  const sessionId = 'bad-artifact-session';
+  const adapter = new FakeAdapter({
+    responses: [
+      response('plan', FakeAdapter.complete(validPlanOutput())),
+      response('execute', {
+        status: 'complete',
+        output: { result: 'claimed bad artifact', artifacts: ['../outside.txt'] },
+        artifacts: ['../outside.txt'],
+        raw_transcript: '{}',
+      }),
+      response('verify', FakeAdapter.complete(validVerifyOutput())),
+    ],
+  });
+  const engine = new PhaseEngine({
+    sessionId,
+    mode: 'standard',
+    goal: 'test bad artifact',
+    workspaceRoot,
+    workflowPath,
+    primaryModel: 'caller',
+    adapter,
+  });
+
+  try {
+    const result = await engine.run();
+    const verdict = await readJson(path.join(workspaceRoot, '.cc-harness', 'sessions', sessionId, 'verdict.json'));
+    assert.equal(result.status, 'failed');
+    assert.equal(verdict.final_status, 'failed_artifact');
+    assert.match(verdict.summary, /outside the workspace/);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
 });
 
 test('PhaseEngine stops failed runs at the failed phase', async () => {

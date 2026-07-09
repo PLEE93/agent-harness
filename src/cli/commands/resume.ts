@@ -1,8 +1,10 @@
 import path from "node:path";
 import { Command } from "commander";
-import { ClaudeCodeAdapter } from "../../adapters/claude-code/adapter";
+import { loadConfig } from "../../core/config/loader";
+import { createSessionRecord } from "../../core/ledger/session";
+import { readPlan } from "../../core/ledger/plan";
 import { resumeSession } from "../../core/resume/resume";
-import { resolveWorkflowPath } from "./run";
+import { createAdapter, createModelAliases, createSeatAdapters, resolveWorkflowPath } from "./run";
 
 export function registerResumeCommand(program: Command): void {
   program
@@ -11,10 +13,21 @@ export function registerResumeCommand(program: Command): void {
     .description("Resume a committed cc-harness session")
     .action(async (sessionId: string) => {
       try {
+        const workspaceRoot = process.cwd();
+        const config = await loadConfig(workspaceRoot);
+        const session = createSessionRecord(sessionId, workspaceRoot);
+        const plan = await readPlan(session.paths.plan);
+        const adapters = createSeatAdapters(config, undefined, plan.routing);
+        const modelAliases = createModelAliases(config, plan.routing);
         const outcome = await resumeSession({
           sessionId,
-          workspaceRoot: process.cwd(),
-          adapter: new ClaudeCodeAdapter(),
+          workspaceRoot,
+          adapter: adapters.caller ?? createAdapter("claude-code", config),
+          adapters,
+          modelAliases,
+          permissionMode: plan.routing?.permission_mode === "safe" || plan.routing?.permission_mode === "ask" || plan.routing?.permission_mode === "trust" || plan.routing?.permission_mode === "yolo"
+            ? plan.routing.permission_mode
+            : config.permissions.default,
           resolveWorkflowPath,
         });
 

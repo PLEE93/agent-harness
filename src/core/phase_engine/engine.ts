@@ -2,9 +2,11 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 import type { Adapter, ExecuteResult, PermissionMode } from "../../adapters/base";
+import { validateArtifacts } from "../ledger/artifacts";
 import { appendEvent } from "../ledger/events";
 import {
   createPlanFromWorkflow,
+  type PlanRouting,
   type PlanFile,
   type WorkflowDefinition,
   type WorkflowPhase,
@@ -13,10 +15,19 @@ import {
 } from "../ledger/plan";
 import { createInitialState, type StateFile, updateState, writeState } from "../ledger/state";
 import { createSession, createSessionRecord, type SessionRecord, writeJsonFile, writeOutput, writeTextFile } from "../ledger/session";
-import { createVerdict, type VerdictFile, type VerdictStatus, writeVerdict } from "../ledger/verdict";
+import {
+  createVerdict,
+  type ArtifactManifestEntry,
+  type ExecutionStatus,
+  type FinalStatus,
+  type VerdictFile,
+  type VerdictStatus,
+  type VerificationStatus,
+  writeVerdict,
+} from "../ledger/verdict";
 import { resolveModelSeat } from "./cognition";
 import { resolveCognitionPack } from "./cognition_packs";
-import { validatePhaseOutput } from "./output_validator";
+import { validatePhaseOutput, type OutputValidationResult } from "./output_validator";
 import { buildHandoffPacket, type HandoffPacket, writeHandoffPacket } from "./prior_output_injector";
 import { runPhase } from "./phase_runner";
 
@@ -32,6 +43,7 @@ export interface PhaseEngineOptions {
   readonly startPhaseIndex?: number;
   readonly adapter?: Adapter;
   readonly adapters?: Record<string, Adapter>;
+  readonly routing?: PlanRouting;
   readonly resolveAdapter?: (phase: WorkflowPhase) => Adapter;
 }
 
@@ -43,6 +55,9 @@ export interface PhaseEngineResult {
 
 interface PhaseFailure {
   readonly status: Exclude<VerdictStatus, "complete">;
+  readonly executionStatus?: ExecutionStatus;
+  readonly verificationStatus?: VerificationStatus;
+  readonly finalStatus: FinalStatus;
   readonly phaseName: string;
   readonly error: string;
 }
@@ -66,6 +81,7 @@ export class PhaseEngine {
       goal: this.options.goal,
       primaryModel: this.options.primaryModel ?? "caller",
       workflow,
+      routing: this.options.routing,
     });
     const initialState = createInitialState(plan);
     const session = await createSession({
@@ -114,6 +130,9 @@ export class PhaseEngine {
       .filter((phase) => phase.status === "complete")
       .map((phase) => phase.name);
     const artifacts = new Set<string>();
+    let artifactManifest: ArtifactManifestEntry[] = [];
+    let verificationStatus: VerificationStatus = "not_run";
+    let finalStatus: FinalStatus = "success";
     const loopCounts = new Map<string, number>();
     const loopOutputs = new Map<string, object[]>();
 
@@ -189,7 +208,12 @@ export class PhaseEngine {
 
       if (result.status !== "complete") {
         const failure = await this.commitFailure(session, plan, state, phase, result);
-        return this.finish(session, plan, failure.status, phasesCompleted, Array.from(artifacts), failure.error);
+        return this.finish(session, plan, failure.status, phasesCompleted, Array.from(artifacts), failure.error, {
+          executionStatus: failure.status,
+          verificationStatus,
+          finalStatus: failure.finalStatus,
+          artifactManifest,
+        });
       }
 
       const validation = validatePhaseOutput(phase.output_contract, result.output);
@@ -209,8 +233,39 @@ export class PhaseEngine {
           type: "phase_validation_failed",
           data: { phase: phase.name, failures: validation.failures },
         });
-        return this.finish(session, plan, "failed", phasesCompleted, Array.from(artifacts), error);
+        return this.finish(session, plan, "failed", phasesCompleted, Array.from(artifacts), error, {
+          executionStatus: "failed",
+          verificationStatus,
+          finalStatus: "failed_contract",
+          artifactManifest,
+        });
       }
+
+      const semanticValidation = validateSemanticOutput(phase, result.output);
+      if (!semanticValidation.valid) {
+        const error = `phase '${phase.name}' failed semantic validation: ${semanticValidation.failures.join("; ")}`;
+        state = updateState(state, {
+          status: "failed",
+          failure_count: state.failure_count + 1,
+          last_error: error,
+        });
+        plan = updatePhaseStatus(plan, phase.name, "failed");
+        await writeState(session.paths.state, state);
+        await writePlan(session.paths.plan, plan);
+        await writeJsonFile(path.join(traceDir, "semantic_validation.json"), semanticValidation);
+        await appendEvent(session.paths.events, {
+          level: "error",
+          type: "phase_semantic_validation_failed",
+          data: { phase: phase.name, failures: semanticValidation.failures },
+        });
+        return this.finish(session, plan, "failed", phasesCompleted, Array.from(artifacts), error, {
+          executionStatus: "failed",
+          verificationStatus,
+          finalStatus: "failed_contract",
+          artifactManifest,
+        });
+      }
+      await writeJsonFile(path.join(traceDir, "semantic_validation.json"), semanticValidation);
 
       if (phase.loop_until !== undefined) {
         const output = result.output as Record<string, unknown>;
@@ -257,12 +312,45 @@ export class PhaseEngine {
               max_iterations: maxLoopIterations,
             },
           });
-          return this.finish(session, plan, "failed", phasesCompleted, Array.from(artifacts), error);
+          return this.finish(session, plan, "failed", phasesCompleted, Array.from(artifacts), error, {
+            executionStatus: "failed",
+            verificationStatus,
+            finalStatus: "failed_loop_limit",
+            artifactManifest,
+          });
         }
       }
 
       const outputPath = await writeOutput(session, phase.name, result.output);
       collectArtifacts(result, artifacts);
+      if (isVerificationPhase(phase)) {
+        verificationStatus = extractVerificationStatus(result.output);
+      }
+      const artifactValidation = await validateArtifacts(workspaceRoot, Array.from(artifacts));
+      artifactManifest = artifactValidation.manifest;
+      await writeJsonFile(path.join(session.paths.artifacts, "manifest.json"), artifactManifest);
+      if (!artifactValidation.valid) {
+        const error = `artifact validation failed: ${artifactValidation.failures.join("; ")}`;
+        state = updateState(state, {
+          status: "failed",
+          failure_count: state.failure_count + 1,
+          last_error: error,
+        });
+        plan = updatePhaseStatus(plan, phase.name, "failed");
+        await writeState(session.paths.state, state);
+        await writePlan(session.paths.plan, plan);
+        await appendEvent(session.paths.events, {
+          level: "error",
+          type: "artifact_validation_failed",
+          data: { phase: phase.name, failures: artifactValidation.failures },
+        });
+        return this.finish(session, plan, "failed", phasesCompleted, Array.from(artifacts), error, {
+          executionStatus: "failed",
+          verificationStatus,
+          finalStatus: "failed_artifact",
+          artifactManifest,
+        });
+      }
       phasesCompleted.push(phase.name);
       state = updateState(state, {
         status: "running",
@@ -281,18 +369,32 @@ export class PhaseEngine {
     }
 
     state = updateState(state, {
-      status: "complete",
+      status: verificationStatus === "fail" ? "failed" : "complete",
       current_phase: plan.phases[plan.phases.length - 1]?.name ?? "",
       phase_index: Math.max(plan.phases.length - 1, 0),
-      last_error: null,
+      last_error: verificationStatus === "fail" ? "verification phase returned verdict fail" : null,
     });
     await writeState(session.paths.state, state);
     await appendEvent(session.paths.events, {
       level: "info",
-      type: "run_completed",
-      data: { phases_completed: phasesCompleted },
+      type: verificationStatus === "fail" ? "run_failed_verification" : "run_completed",
+      data: { phases_completed: phasesCompleted, verification_status: verificationStatus },
     });
-    return this.finish(session, plan, "complete", phasesCompleted, Array.from(artifacts), "completed all phases");
+    finalStatus = verificationStatus === "fail" ? "failed_verification" : "success";
+    return this.finish(
+      session,
+      plan,
+      verificationStatus === "fail" ? "failed" : "complete",
+      phasesCompleted,
+      Array.from(artifacts),
+      verificationStatus === "fail" ? "verification phase returned verdict fail" : "completed all phases",
+      {
+        executionStatus: "complete",
+        verificationStatus,
+        finalStatus,
+        artifactManifest,
+      },
+    );
   }
 
   private async prepareHandoff(
@@ -335,6 +437,7 @@ export class PhaseEngine {
     result: ExecuteResult,
   ): Promise<PhaseFailure> {
     const status: Exclude<VerdictStatus, "complete"> = result.status === "blocked" ? "blocked" : "failed";
+    const finalStatus: FinalStatus = status === "blocked" ? "blocked" : "failed_adapter";
     const error = result.error ?? `phase '${phase.name}' returned status '${result.status}'`;
     const nextState = updateState(state, {
       status,
@@ -349,7 +452,7 @@ export class PhaseEngine {
       type: "phase_failed",
       data: { phase: phase.name, status, error },
     });
-    return { status, phaseName: phase.name, error };
+    return { status, verificationStatus: "not_run", finalStatus, phaseName: phase.name, error };
   }
 
   private async finish(
@@ -359,22 +462,39 @@ export class PhaseEngine {
     phasesCompleted: string[],
     artifacts: string[],
     summaryDetail: string,
+    meta: {
+      readonly executionStatus?: ExecutionStatus;
+      readonly verificationStatus?: VerificationStatus;
+      readonly finalStatus?: FinalStatus;
+      readonly artifactManifest?: ArtifactManifestEntry[];
+    } = {},
   ): Promise<PhaseEngineResult> {
     const summary = buildSummary(plan, status, phasesCompleted, summaryDetail);
     const verdict = createVerdict({
       plan,
       status,
+      executionStatus: meta.executionStatus,
+      verificationStatus: meta.verificationStatus,
+      finalStatus: meta.finalStatus,
       phasesCompleted,
       artifacts,
+      artifactManifest: meta.artifactManifest,
       summary,
     });
     await writeVerdict(session.paths.verdict, verdict);
     await writeTextFile(session.paths.summary, `${summary}\n`);
-    await appendRunIndex(session, plan, status, phasesCompleted, artifacts, summaryDetail);
+    await appendRunIndex(session, plan, status, phasesCompleted, artifacts, summaryDetail, meta);
     await appendEvent(session.paths.events, {
       level: status === "complete" ? "info" : "error",
       type: "verdict_written",
-      data: { status, phases_completed: phasesCompleted, artifacts },
+      data: {
+        status,
+        execution_status: verdict.execution_status,
+        verification_status: verdict.verification_status,
+        final_status: verdict.final_status,
+        phases_completed: phasesCompleted,
+        artifacts,
+      },
     });
     return { status, sessionId: session.sessionId, verdict };
   }
@@ -420,6 +540,15 @@ export function buildPhasePrompt(plan: PlanFile, phase: WorkflowPhase, handoff: 
   const cognition = resolveCognitionPack(phase.cognition);
   if (cognition !== undefined) {
     lines.push(`**Cognition pack:** ${cognition.name}`, "```text", cognition.body, "```", "");
+    if (cognition.required_fields.length > 0) {
+      lines.push(
+        "**Cognition obligations:** include these concepts when the output contract has room for detail:",
+        "```json",
+        JSON.stringify({ required_fields: cognition.required_fields, failure_modes: cognition.failure_modes }, null, 2),
+        "```",
+        "",
+      );
+    }
   }
 
   lines.push(
@@ -476,6 +605,73 @@ function collectArtifacts(result: ExecuteResult, artifacts: Set<string>): void {
   }
 }
 
+function isVerificationPhase(phase: WorkflowPhase): boolean {
+  return phase.name === "verify" || phase.type === "verify" || phase.type === "test";
+}
+
+function extractVerificationStatus(output: object): VerificationStatus {
+  if (!isRecord(output) || typeof output.verdict !== "string") {
+    return "unknown";
+  }
+  if (output.verdict === "pass" || output.verdict === "fail") {
+    return output.verdict;
+  }
+  return "unknown";
+}
+
+function validateSemanticOutput(phase: WorkflowPhase, output: object): OutputValidationResult {
+  const failures: string[] = [];
+
+  for (const check of phase.semantic_checks ?? []) {
+    if (check.phase !== undefined && check.phase !== phase.name) {
+      continue;
+    }
+    const actual = readPath(output, check.field);
+    if (actual !== check.pass_value) {
+      failures.push(
+        `semantic check '${check.field}' expected ${JSON.stringify(check.pass_value)}, got ${JSON.stringify(actual)}`,
+      );
+    }
+  }
+
+  if (isVerificationPhase(phase)) {
+    const verificationStatus = extractVerificationStatus(output);
+    if (verificationStatus === "pass") {
+      const evidence = isRecord(output) && Array.isArray(output.evidence) ? output.evidence : [];
+      if (evidence.length === 0 || !evidence.every((item) => typeof item === "string" && item.trim().length > 0)) {
+        failures.push("verify verdict pass requires non-empty string evidence");
+      }
+      const commandsRun = isRecord(output) && Array.isArray(output.commands_run) ? output.commands_run : [];
+      if (commandsRun.length === 0) {
+        failures.push("verify verdict pass requires at least one command result in commands_run");
+      }
+      for (const [index, commandResult] of commandsRun.entries()) {
+        if (!isRecord(commandResult)) {
+          failures.push(`commands_run[${index}] must be an object`);
+          continue;
+        }
+        if (typeof commandResult.command !== "string" || commandResult.command.trim().length === 0) {
+          failures.push(`commands_run[${index}].command must be a non-empty string`);
+        }
+        if (commandResult.exit_code !== 0) {
+          failures.push(`commands_run[${index}].exit_code must be 0 for verdict pass`);
+        }
+      }
+    }
+  }
+
+  return { valid: failures.length === 0, failures };
+}
+
+function readPath(value: unknown, fieldPath: string): unknown {
+  return fieldPath.split(".").reduce<unknown>((current, segment) => {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    return current[segment];
+  }, value);
+}
+
 function extractStringArray(value: unknown, key: string): string[] {
   if (!isRecord(value) || !Array.isArray(value[key])) {
     return [];
@@ -498,6 +694,11 @@ async function appendRunIndex(
   phasesCompleted: string[],
   artifacts: string[],
   detail: string,
+  meta: {
+    readonly executionStatus?: ExecutionStatus;
+    readonly verificationStatus?: VerificationStatus;
+    readonly finalStatus?: FinalStatus;
+  } = {},
 ): Promise<void> {
   const indexRoot = path.resolve(session.paths.root, "..", "..", "index");
   const record = {
@@ -505,6 +706,9 @@ async function appendRunIndex(
     goal: plan.goal,
     mode: plan.mode,
     status,
+    execution_status: meta.executionStatus ?? status,
+    verification_status: meta.verificationStatus ?? "unknown",
+    final_status: meta.finalStatus ?? (status === "complete" ? "success" : status === "blocked" ? "blocked" : "failed_exception"),
     phases_completed: phasesCompleted,
     artifacts,
     detail,
@@ -515,7 +719,7 @@ async function appendRunIndex(
   if (status !== "complete") {
     await appendJsonl(path.join(indexRoot, "failures.jsonl"), {
       ...record,
-      failure_type: classifyFailure(detail),
+      failure_type: classifyFailure(detail, meta.finalStatus),
     });
   }
 }
@@ -525,7 +729,10 @@ async function appendJsonl(filePath: string, value: object): Promise<void> {
   await fs.appendFile(filePath, `${JSON.stringify(value)}\n`, "utf8");
 }
 
-function classifyFailure(detail: string): string {
+function classifyFailure(detail: string, finalStatus?: FinalStatus): string {
+  if (finalStatus !== undefined && finalStatus !== "success") {
+    return finalStatus;
+  }
   if (/contract|missing required key|validation/i.test(detail)) {
     return "contract_violation";
   }

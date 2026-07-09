@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import type { Adapter, PermissionMode } from "../../adapters/base";
+import type { HarnessConfig } from "../config/loader";
 import { readPlan } from "../ledger/plan";
 import { readState, type SessionStatus } from "../ledger/state";
 import { createSessionRecord } from "../ledger/session";
@@ -9,6 +10,9 @@ export interface ResumeRequest {
   readonly sessionId: string;
   readonly workspaceRoot?: string;
   readonly adapter: Adapter;
+  readonly adapters?: Record<string, Adapter>;
+  readonly config?: HarnessConfig;
+  readonly modelAliases?: Record<string, string>;
   readonly permissionMode?: PermissionMode;
   readonly resolveWorkflowPath?: (mode: string) => Promise<string>;
 }
@@ -62,9 +66,12 @@ export async function resumeSession(request: ResumeRequest): Promise<ResumeSessi
     workspaceRoot,
     workflowPath,
     primaryModel: plan.primary_model,
+    modelAliases: request.modelAliases,
     permissionMode: request.permissionMode ?? "ask",
     startPhaseIndex: state.phase_index,
     adapter: request.adapter,
+    adapters: request.adapters,
+    routing: plan.routing,
   });
 
   return {

@@ -49,3 +49,9 @@ phases:
     output_contract:
       verdict: pass|fail
       evidence: [string]
+      commands_run:
+        - command: string
+          exit_code: number
+          stdout_excerpt: string
+      files_checked: [string]
+      residual_risk: [string]

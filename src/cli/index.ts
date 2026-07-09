@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { registerAdaptersCommand } from "./commands/adapters";
+import { registerBenchmarkCommand } from "./commands/benchmark";
 import { registerDoctorCommand } from "./commands/doctor";
 import { registerEvalCommand } from "./commands/eval";
+import { registerImproveCommand } from "./commands/improve";
+import { registerReplayCommand } from "./commands/replay";
 import { registerResumeCommand } from "./commands/resume";
+import { registerRouteCommand } from "./commands/route";
 import { registerRunCommand } from "./commands/run";
 import { registerStateCommand } from "./commands/state";
 
@@ -24,6 +28,10 @@ export function buildCli(): Command {
   registerAdaptersCommand(program);
   registerDoctorCommand(program);
   registerEvalCommand(program);
+  registerReplayCommand(program);
+  registerBenchmarkCommand(program);
+  registerImproveCommand(program);
+  registerRouteCommand(program);
 
   return program;
 }

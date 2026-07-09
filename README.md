@@ -18,11 +18,19 @@ Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local f
 - Explicit `seats:` config for per-phase adapter + model routing, e.g. Claude planning, Codex execution, Claude verification
 - Config file loading from `cc-harness.config.yaml` (falls back to `~/.agent-harness/cc-harness.config.yaml`, then built-in defaults) for default mode, default permission mode, per-phase model aliases, and per-seat adapters
 - Built-in cognition packs injected into phase prompts (`senior_engineer_debug`, `epistemic_research`, `exec_decision_memo`, `code_review`, `refactor_safe`)
+- Cognition packs include structured obligations and known failure modes, not just advice text
+- Verdicts split harness execution from task success: `execution_status`, `verification_status`, and `final_status`
+- Verify phases require evidence-native output: command results, files checked, evidence, and residual risk
+- Artifact manifests validate claimed artifacts stay inside the workspace, exist, and include size + SHA-256
 - Per-phase flight recorder under each session: prompt, adapter invocation, handoff, raw transcript, parsed output, validation, and timing
 - Local run index under `.cc-harness/index/` for sessions and classified failures
 - `cc-harness eval` for deterministic harness-quality checks, baseline comparisons against raw-agent failure modes, and conversion of prior failure records into reusable eval case records
+- `cc-harness replay` reconstructs a run from the ledger
+- `cc-harness benchmark` writes deterministic harness-vs-raw comparison reports; `--live` is explicit and blocks unless real live benchmark prerequisites exist
+- `cc-harness improve --from-failures` converts indexed failures into eval cases and patch proposals
+- `cc-harness route` classifies tasks into mode, cognition pack, verifier type, artifact schema, and permission mode
 - `standard-high`, `autonomous`, and `autonomous-high` mode YAMLs are bundled in `modes/` and `src/modes/` and resolve via `--mode <name>` (package-relative resolution, verified from a directory outside the project); the engine executes phase types generically, so all four modes run through the same engine/config/adapter wiring as `standard`
-- Deterministic JavaScript test suite: `npm test` (17 tests, fake adapter only, no live CLI calls)
+- Deterministic JavaScript test suite: `npm test` (20 tests, fake adapter only, no live CLI calls)
 - `cc-harness run "<goal>" --mode standard`
 - `cc-harness run "<goal>" --mode <any bundled mode> --dry-run`
 - `cc-harness doctor`
@@ -111,12 +119,15 @@ Expected `verdict.json` shape:
   "session_id": "...",
   "goal": "what is the capital of France",
   "mode": "standard",
+  "execution_status": "complete",
+  "verification_status": "pass",
+  "final_status": "success",
   "status": "complete",
   "phases_completed": ["plan", "execute", "verify"]
 }
 ```
 
-`status: complete` means the supported harness path completed end-to-end.
+`execution_status: complete` means the harness workflow ran to the end. `verification_status: pass` means the verifier returned passing evidence. `final_status: success` is the task-success field; verifier failure produces `execution_status: complete`, `verification_status: fail`, and `final_status: failed_verification`.
 
 ---
 
@@ -160,6 +171,14 @@ cc-harness adapters enable codex
 
 Uses the local `codex` CLI via `CodexAdapter`. Availability is checked on PATH; if Codex is not installed, `--with codex` fails honestly instead of crashing. `adapters enable codex` checks the same availability and prints an install hint when the CLI is missing.
 
+### Permission Capabilities
+
+```bash
+cc-harness adapters list --permissions
+```
+
+The permission matrix is adapter-specific. Codex modes are mapped by the harness into sandbox/approval settings. Claude Code non-`yolo` modes are delegated to the Claude CLI and are not marketed as equivalent sandbox enforcement. `yolo` is the only Claude mode where cc-harness explicitly passes the dangerous skip-permissions flag.
+
 ---
 
 ## Per-Seat Routing
@@ -201,7 +220,27 @@ This is the debugging layer above `events.jsonl`: it shows what was asked, which
 
 Every completed run appends a compact record to `.cc-harness/index/sessions.jsonl`. Failed or blocked runs also append to `.cc-harness/index/failures.jsonl` with a basic failure type such as `contract_violation`, `rate_limited`, `auth_blocked`, `loop_limit_reached`, `adapter_failure`, or `verification_failed`.
 
-`cc-harness eval` mines this failure index into `.cc-harness/evals/generated/failures.jsonl`. This is a reusable eval-case layer, not yet an automatic prompt-patch loop.
+`cc-harness eval` mines this failure index into `.cc-harness/evals/generated/failures.jsonl`. `cc-harness improve --from-failures` clusters those failures into likely fix types (`prompt_patch`, `mode_patch`, `adapter_parser_patch`, `schema_patch`, `docs_patch`) and writes `.cc-harness/improvements/latest-plan.json`. It proposes patches; it does not auto-merge.
+
+## Replay, Benchmark, Improve, Route
+
+```bash
+cc-harness replay <session-id>
+cc-harness replay <session-id> --phase execute
+cc-harness replay <session-id> --from-failure
+
+cc-harness benchmark --write-report
+cc-harness benchmark --live
+
+cc-harness improve --from-failures
+cc-harness route "fix the failing CLI option"
+```
+
+`replay` reconstructs phase prompts, handoffs, adapter invocation, raw transcript, parsed output, validation, timing, and verdict from the ledger.
+
+`benchmark` produces deterministic harness-vs-raw comparison reports from the eval suite. `--live` is intentionally not faked: it reports blocked unless live Claude/Codex credentials and a real task corpus are present.
+
+`route` maps task text to task type, mode, cognition pack, verifier type, artifact schema, and permission mode.
 
 ## Harness Quality Evals
 
@@ -235,6 +274,7 @@ cc-harness state <session-id>
 
 # Adapter inspection and optional Codex prerequisite hint
 cc-harness adapters list
+cc-harness adapters list --permissions
 cc-harness adapters enable codex
 
 # Diagnostics
@@ -242,6 +282,18 @@ cc-harness doctor
 
 # Harness quality evals
 cc-harness eval [--json]
+
+# Reconstruct a prior run
+cc-harness replay <session-id> [--phase <phase>] [--from-failure]
+
+# Compare deterministic raw-agent failure modes against harness behavior
+cc-harness benchmark [--json] [--write-report] [--live]
+
+# Convert indexed failures into eval cases and patch proposals
+cc-harness improve --from-failures [--json]
+
+# Classify a task before running
+cc-harness route "<goal>" [--json]
 ```
 
 The CLI accepts `--with <adapter>` set to `claude-code` (default) or `codex`; both are wired for execution. `fake` exists for internal deterministic tests only and is not a valid `--with` value on the CLI.
@@ -259,8 +311,9 @@ Every run writes to `.cc-harness/sessions/<session-id>/`:
   events.jsonl       # append-only event log
   outputs/           # per-phase structured outputs
   handoffs/          # model-to-model packets
-  artifacts/         # files produced during the run
-  verdict.json       # final structured result
+  traces/            # prompt, invocation, transcript, parsed output, validation, timing
+  artifacts/         # artifact manifest with existence, workspace, size, and SHA-256 checks
+  verdict.json       # execution_status, verification_status, final_status
   summary.md         # human-readable summary
 ```
 

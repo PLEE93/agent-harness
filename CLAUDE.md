@@ -82,6 +82,10 @@ cc-harness resume <session-id>   # resume after interruption
 cc-harness state <session-id>    # check current phase
 cc-harness doctor                # check prerequisites
 cc-harness eval                  # run deterministic harness-quality evals
+cc-harness replay <session-id>   # reconstruct prompts, handoffs, outputs, validation, and verdict
+cc-harness benchmark             # compare deterministic raw-agent failure modes against harness behavior
+cc-harness improve --from-failures # propose patches from indexed failures
+cc-harness route "<goal>"        # classify task type, mode, verifier, artifact schema, permissions
 ```
 
 Sessions at `.cc-harness/sessions/<id>/` — local, no cloud, resumable anytime.
@@ -92,7 +96,8 @@ Sessions at `.cc-harness/sessions/<id>/` — local, no cloud, resumable anytime.
 
 - COMPLEX task → use harness. Not optional.
 - The harness handles planning, phase commits, output carry-forward, and resumability.
-- Do not declare done until `verdict.json` shows `status: complete`.
+- Do not declare done until `verdict.json` shows `execution_status: complete`, `verification_status: pass`, and `final_status: success`.
 - For harness changes, also run `cc-harness eval`; it writes deterministic quality evidence and mined failure cases under `.cc-harness/evals/`.
+- Use `cc-harness adapters list --permissions` before making permission claims; Claude Code non-yolo modes are delegated to Claude CLI behavior, not harness sandbox guarantees.
 - Any failure: diagnose root cause before retrying. No tool-switching without diagnosis.
 - Sessions survive context resets — `cc-harness resume <id>` picks up mid-phase.

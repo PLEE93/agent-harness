@@ -61,7 +61,7 @@ async function caseCompletesStandard(): Promise<EvalCaseResult> {
     const result = await runEngine(ctx, [
       FakeAdapter.response("plan", FakeAdapter.complete({ phases: [{ name: "execute", goal: "do it" }], done_criteria: ["verified"] })),
       FakeAdapter.response("execute", FakeAdapter.complete({ result: "artifact", artifacts: ["artifact.txt"] }, ["artifact.txt"])),
-      FakeAdapter.response("verify", FakeAdapter.complete({ verdict: "pass", evidence: ["artifact"] })),
+      FakeAdapter.response("verify", FakeAdapter.complete(verifyPassOutput("artifact.txt"))),
     ]);
     assertTrue(result.status === "complete", "standard mode completed");
     return ["verdict status complete", "all three phases consumed fake responses"];
@@ -73,7 +73,7 @@ async function caseStopsOnContractViolation(): Promise<EvalCaseResult> {
     const result = await runEngine(ctx, [
       FakeAdapter.response("plan", FakeAdapter.complete({ phases: [{ name: "execute", goal: "do it" }], done_criteria: ["verified"] })),
       FakeAdapter.response("execute", FakeAdapter.complete({ wrong: "shape" })),
-      FakeAdapter.response("verify", FakeAdapter.complete({ verdict: "pass", evidence: ["should not run"] })),
+      FakeAdapter.response("verify", FakeAdapter.complete(verifyPassOutput("artifact.txt"))),
     ]);
     const verdict = await readJson<{ summary: string; phases_completed: string[] }>(path.join(ctx.sessionRoot, "verdict.json"));
     assertTrue(result.status === "failed", "contract violation failed the run");
@@ -89,7 +89,7 @@ async function caseBlocksWithoutDownstreamExecution(): Promise<EvalCaseResult> {
       responses: [
         FakeAdapter.response("plan", FakeAdapter.complete({ phases: [{ name: "execute", goal: "do it" }], done_criteria: ["verified"] })),
         FakeAdapter.response("execute", FakeAdapter.rateLimit("quota exhausted")),
-        FakeAdapter.response("verify", FakeAdapter.complete({ verdict: "pass", evidence: ["should not run"] })),
+        FakeAdapter.response("verify", FakeAdapter.complete(verifyPassOutput("artifact.txt"))),
       ],
     });
     const result = await runEngine(ctx, undefined, adapter);
@@ -142,7 +142,7 @@ async function caseWritesTraceArtifacts(): Promise<EvalCaseResult> {
     const result = await runEngine(ctx, [
       FakeAdapter.response("plan", FakeAdapter.complete({ phases: [{ name: "execute", goal: "do it" }], done_criteria: ["verified"] })),
       FakeAdapter.response("execute", FakeAdapter.complete({ result: "artifact", artifacts: ["artifact.txt"] })),
-      FakeAdapter.response("verify", FakeAdapter.complete({ verdict: "pass", evidence: ["artifact"] })),
+      FakeAdapter.response("verify", FakeAdapter.complete(verifyPassOutput("artifact.txt"))),
     ]);
     assertTrue(result.status === "complete", "trace run completed");
     const traceRoot = path.join(ctx.sessionRoot, "traces", "execute");
@@ -228,6 +228,16 @@ async function runEngine(ctx: CaseContext, responses?: ReturnType<typeof FakeAda
     adapter: fake,
   });
   return engine.run();
+}
+
+function verifyPassOutput(filePath: string): object {
+  return {
+    verdict: "pass",
+    evidence: [`${filePath} checked`],
+    commands_run: [{ command: "npm test", exit_code: 0, stdout_excerpt: "pass" }],
+    files_checked: [filePath],
+    residual_risk: [],
+  };
 }
 
 function buildQualityClaims(

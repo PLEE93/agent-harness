@@ -42,6 +42,9 @@ function validateField(value: unknown, shape: unknown, path: string): string[] {
   }
 
   if (isRecord(shape)) {
+    if (isSchemaShape(shape)) {
+      return validateSchemaShape(value, shape, path);
+    }
     if (!isRecord(value)) {
       return [`key '${path}' must be an object`];
     }
@@ -86,6 +89,97 @@ function validateArrayItem(value: unknown, shape: unknown, path: string): string
     return isRecord(value) ? [] : [`key '${path}' must be an object`];
   }
   return validateField(value, shape, path);
+}
+
+interface SchemaShape extends Record<string, unknown> {
+  readonly type?: unknown;
+  readonly required?: unknown;
+  readonly additionalProperties?: unknown;
+  readonly properties?: unknown;
+  readonly items?: unknown;
+  readonly enum?: unknown;
+  readonly minLength?: unknown;
+  readonly maxLength?: unknown;
+}
+
+function isSchemaShape(shape: Record<string, unknown>): shape is SchemaShape {
+  return typeof shape.type === "string"
+    || Array.isArray(shape.required)
+    || shape.properties !== undefined
+    || shape.items !== undefined
+    || Array.isArray(shape.enum);
+}
+
+function validateSchemaShape(value: unknown, schema: SchemaShape, path: string): string[] {
+  const failures: string[] = [];
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
+    failures.push(`key '${path}' must be one of ${schema.enum.map((item) => JSON.stringify(item)).join(", ")}`);
+  }
+
+  if (schema.type === "object") {
+    if (!isRecord(value)) {
+      return [...failures, `key '${path}' must be an object`];
+    }
+    const required = Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : [];
+    for (const field of required) {
+      if (value[field] === undefined) {
+        failures.push(`missing required key '${path}.${field}'`);
+      }
+    }
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    for (const [field, childSchema] of Object.entries(properties)) {
+      if (value[field] !== undefined) {
+        failures.push(...validateField(value[field], childSchema, `${path}.${field}`));
+      }
+    }
+    if (schema.additionalProperties === false) {
+      const allowed = new Set(Object.keys(properties));
+      for (const field of Object.keys(value)) {
+        if (!allowed.has(field)) {
+          failures.push(`key '${path}.${field}' is not allowed by additionalProperties=false`);
+        }
+      }
+    }
+    return failures;
+  }
+
+  if (schema.type === "array") {
+    if (!Array.isArray(value)) {
+      return [...failures, `key '${path}' must be an array`];
+    }
+    if (schema.items !== undefined) {
+      for (const [index, item] of value.entries()) {
+        failures.push(...validateField(item, schema.items, `${path}[${index}]`));
+      }
+    }
+    return failures;
+  }
+
+  if (schema.type === "string") {
+    if (typeof value !== "string") {
+      return [...failures, `key '${path}' must be a string, received ${typeof value}`];
+    }
+    if (typeof schema.minLength === "number" && value.length < schema.minLength) {
+      failures.push(`key '${path}' must have length >= ${schema.minLength}`);
+    }
+    if (typeof schema.maxLength === "number" && value.length > schema.maxLength) {
+      failures.push(`key '${path}' must have length <= ${schema.maxLength}`);
+    }
+    return failures;
+  }
+
+  if (schema.type === "number" || schema.type === "integer") {
+    if (typeof value !== "number" || (schema.type === "integer" && !Number.isInteger(value))) {
+      return [...failures, `key '${path}' must be a ${schema.type}`];
+    }
+    return failures;
+  }
+
+  if (schema.type === "boolean") {
+    return typeof value === "boolean" ? failures : [...failures, `key '${path}' must be a boolean`];
+  }
+
+  return failures;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,4 +1,6 @@
 import type { Adapter, ExecuteParams, ExecuteResult } from "../base";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
 export interface FakeAdapterResponse {
   readonly phase?: string;
@@ -39,6 +41,12 @@ export class FakeAdapter implements Adapter {
     }
 
     const [response] = this.responses.splice(responseIndex, 1);
+    if (response.result.status === "complete" && params.working_dir !== undefined) {
+      await materializeArtifacts(params.working_dir, [
+        ...(response.result.artifacts ?? []),
+        ...extractArtifacts(response.result.output),
+      ]);
+    }
     return response.result;
   }
 
@@ -104,4 +112,26 @@ export class FakeAdapter implements Adapter {
   public static auth(reason = "authentication required"): ExecuteResult {
     return FakeAdapter.blocked(reason);
   }
+}
+
+async function materializeArtifacts(workingDir: string, artifacts: string[]): Promise<void> {
+  for (const artifact of artifacts) {
+    if (artifact.trim().length === 0 || path.isAbsolute(artifact) || artifact.includes("..")) {
+      continue;
+    }
+    const artifactPath = path.join(workingDir, artifact);
+    await fs.mkdir(path.dirname(artifactPath), { recursive: true });
+    await fs.writeFile(artifactPath, `fake artifact: ${artifact}\n`, "utf8");
+  }
+}
+
+function extractArtifacts(output: object): string[] {
+  if (!isRecord(output) || !Array.isArray(output.artifacts)) {
+    return [];
+  }
+  return output.artifacts.filter((item): item is string => typeof item === "string");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -6,6 +6,7 @@ import { ClaudeCodeAdapter } from "../../adapters/claude-code/adapter";
 import { CodexAdapter } from "../../adapters/codex/adapter";
 import type { Adapter, PermissionMode } from "../../adapters/base";
 import { loadConfig, type HarnessConfig } from "../../core/config/loader";
+import type { PlanRouting } from "../../core/ledger/plan";
 import { PhaseEngine } from "../../core/phase_engine/engine";
 
 interface RunOptions {
@@ -51,6 +52,7 @@ export async function runHarness(goal: string, options: RunOptions): Promise<voi
   const adapters = createSeatAdapters(config, options.with);
   const adapter = adapters.caller ?? createAdapter("claude-code", config);
   const modelAliases = createModelAliases(config);
+  const routing = createPlanRouting(config, options.with, modelAliases, permissionMode);
 
   if (options.dryRun === true) {
     console.log(`Dry run: ${goal}`);
@@ -83,6 +85,7 @@ export async function runHarness(goal: string, options: RunOptions): Promise<voi
     permissionMode,
     adapter,
     adapters,
+    routing,
   });
 
   const result = await engine.run();
@@ -133,9 +136,13 @@ export function createAdapter(adapterName: string | undefined, config: HarnessCo
   }
 }
 
-function createSeatAdapters(config: HarnessConfig, forcedAdapterName: string | undefined): Record<string, Adapter> {
+export function createSeatAdapters(
+  config: HarnessConfig,
+  forcedAdapterName: string | undefined,
+  routing?: PlanRouting,
+): Record<string, Adapter> {
   const adapters: Record<string, Adapter> = {};
-  const seatEntries = Object.entries(config.seats);
+  const seatEntries = Object.entries(routing?.seats ?? config.seats);
   for (const [seat, seatConfig] of seatEntries) {
     adapters[seat] = createAdapter(forcedAdapterName ?? seatConfig.adapter ?? "claude-code", config);
   }
@@ -145,14 +152,36 @@ function createSeatAdapters(config: HarnessConfig, forcedAdapterName: string | u
   return adapters;
 }
 
-function createModelAliases(config: HarnessConfig): Record<string, string> {
+export function createModelAliases(config: HarnessConfig, routing?: PlanRouting): Record<string, string> {
   const aliases: Record<string, string> = { ...config.models };
-  for (const [seat, seatConfig] of Object.entries(config.seats)) {
+  for (const [seat, seatConfig] of Object.entries(routing?.seats ?? config.seats)) {
     if (seatConfig.model !== undefined && seatConfig.model.trim().length > 0) {
       aliases[seat] = seatConfig.model;
     }
   }
   return aliases;
+}
+
+export function createPlanRouting(
+  config: HarnessConfig,
+  forcedAdapterName: string | undefined,
+  modelAliases: Record<string, string>,
+  permissionMode: PermissionMode,
+): PlanRouting {
+  const seats: PlanRouting["seats"] = {};
+  for (const [seat, seatConfig] of Object.entries(config.seats)) {
+    seats[seat] = {
+      adapter: forcedAdapterName ?? seatConfig.adapter ?? "claude-code",
+      model: modelAliases[seat] ?? seatConfig.model ?? "caller",
+    };
+  }
+  if (seats.caller === undefined) {
+    seats.caller = {
+      adapter: forcedAdapterName ?? "claude-code",
+      model: modelAliases.caller ?? "caller",
+    };
+  }
+  return { permission_mode: permissionMode, seats };
 }
 
 function describeSeatAdapters(adapters: Record<string, Adapter>): string {

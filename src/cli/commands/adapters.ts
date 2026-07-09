@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Command } from "commander";
+import { permissionCapabilityMatrix } from "../../adapters/permissions";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,10 +19,11 @@ export function registerAdaptersCommand(program: Command): void {
 
   adapters
     .command("list")
+    .option("--permissions", "Include effective permission capability matrix")
     .description("List configured adapters")
-    .action(async () => {
+    .action(async (options: { permissions?: boolean }) => {
       try {
-        console.log(formatAdapters(await listAdapters()));
+        console.log(formatAdapters(await listAdapters(), options.permissions === true));
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
@@ -87,11 +89,23 @@ export async function enableAdapter(adapter: string): Promise<string> {
   ].join("\n");
 }
 
-function formatAdapters(adapters: AdapterStatus[]): string {
-  return [
+function formatAdapters(adapters: AdapterStatus[], includePermissions = false): string {
+  const lines = [
     "Adapters:",
     ...adapters.map((adapter) => `  ${adapter.name.padEnd(13)} ${adapter.kind.padEnd(9)} ${adapter.detail}`),
-  ].join("\n");
+  ];
+  if (includePermissions) {
+    lines.push("", "Permission capabilities:");
+    for (const adapter of adapters.filter((item) => item.name !== "fake")) {
+      for (const capability of permissionCapabilityMatrix(adapter.name)) {
+        lines.push(
+          `  ${capability.adapter.padEnd(13)} ${capability.mode.padEnd(5)} fs=${capability.filesystem} net=${capability.network} approval=${capability.approval} destructive=${capability.destructive_actions} harness_enforced=${capability.enforced_by_harness}`,
+        );
+        lines.push(`    ${capability.note}`);
+      }
+    }
+  }
+  return lines.join("\n");
 }
 
 async function commandVersion(command: string): Promise<{ available: boolean; version: string }> {

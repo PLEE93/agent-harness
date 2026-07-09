@@ -3,6 +3,13 @@ import { readJsonFile, writeJsonFile } from "./session";
 
 export type PhaseStatus = "pending" | "running" | "complete" | "blocked" | "failed";
 
+export interface SemanticCheck {
+  readonly phase?: string;
+  readonly field: string;
+  readonly pass_value: unknown;
+  readonly fail_status?: string;
+}
+
 export interface LoopUntilCondition {
   readonly field: string;
   readonly value: unknown;
@@ -14,6 +21,7 @@ export interface WorkflowPhase {
   readonly objective?: string;
   readonly model_seat: string;
   readonly output_contract?: OutputContract;
+  readonly semantic_checks?: SemanticCheck[];
   readonly max_tool_calls?: number;
   readonly max_turns?: number;
   readonly handoff_in?: string | string[];
@@ -24,12 +32,23 @@ export interface WorkflowPhase {
   readonly status: PhaseStatus;
 }
 
+export interface SeatRoute {
+  readonly adapter: string;
+  readonly model: string;
+}
+
+export interface PlanRouting {
+  readonly permission_mode?: string;
+  readonly seats: Record<string, SeatRoute>;
+}
+
 export interface PlanFile {
   readonly session_id: string;
   readonly goal: string;
   readonly mode: string;
   readonly primary_model: string;
   readonly participants: string[];
+  readonly routing?: PlanRouting;
   readonly phases: WorkflowPhase[];
   readonly created_at: string;
   readonly updated_at: string;
@@ -48,6 +67,7 @@ export interface WorkflowDefinitionPhase {
   readonly loop_until?: LoopUntilCondition;
   readonly max_loop_iterations?: number;
   readonly output_contract?: OutputContract;
+  readonly semantic_checks?: SemanticCheck[];
 }
 
 export interface WorkflowDefinition {
@@ -61,6 +81,7 @@ export interface CreatePlanParams {
   readonly goal: string;
   readonly primaryModel: string;
   readonly workflow: WorkflowDefinition;
+  readonly routing?: PlanRouting;
   readonly createdAt?: string;
 }
 
@@ -72,6 +93,7 @@ export function createPlanFromWorkflow(params: CreatePlanParams): PlanFile {
     objective: phase.objective,
     model_seat: phase.model ?? "caller",
     output_contract: phase.output_contract,
+    semantic_checks: phase.semantic_checks,
     max_tool_calls: phase.max_tool_calls,
     max_turns: phase.max_turns,
     handoff_in: phase.handoff_in,
@@ -88,6 +110,7 @@ export function createPlanFromWorkflow(params: CreatePlanParams): PlanFile {
     mode: params.workflow.mode,
     primary_model: params.primaryModel,
     participants: Array.from(new Set(phases.map((phase) => phase.model_seat))),
+    routing: params.routing,
     phases,
     created_at: now,
     updated_at: now,

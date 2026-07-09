@@ -70,3 +70,40 @@ test('validatePhaseOutput rejects non-object output when a contract exists', () 
   assert.equal(result.valid, false);
   assert.deepEqual(result.failures, ['phase output must be a JSON object matching the output_contract']);
 });
+
+test('validatePhaseOutput supports JSON-Schema-style object contracts', () => {
+  const contract = {
+    result: {
+      type: 'object',
+      required: ['status', 'tests'],
+      additionalProperties: false,
+      properties: {
+        status: { enum: ['complete', 'blocked'] },
+        tests: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['command', 'exit_code'],
+            additionalProperties: false,
+            properties: {
+              command: { type: 'string', minLength: 1 },
+              exit_code: { type: 'integer' },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  assert.equal(validatePhaseOutput(contract, {
+    result: { status: 'complete', tests: [{ command: 'npm test', exit_code: 0 }] },
+  }).valid, true);
+
+  const result = validatePhaseOutput(contract, {
+    result: { status: 'maybe', tests: [{ command: '', exit_code: 0, extra: true }], extra: true },
+  });
+  assert.equal(result.valid, false);
+  assert.match(result.failures.join('\n'), /must be one of/);
+  assert.match(result.failures.join('\n'), /length >= 1/);
+  assert.match(result.failures.join('\n'), /additionalProperties=false/);
+});
