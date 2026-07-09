@@ -3,3 +3,14 @@ dist/
 *.js.map
 .cc-harness/
 cc-harness.config.yaml
+coverage/
+*.tgz
+.DS_Store
+
+# Internal AI-mission process artifacts (not shipped product files).
+# Canonical copies live in /data/x-missions/x-20260709-fca18aee/artifacts/ and
+# PHASE2_MISSION.md remains on disk at the project root for reference; none of
+# these three should land in the public repo history.
+PHASE2_MISSION.md
+WAVE_A_A1_A2_HANDOFF.md
+WAVE_B_B1_B2_HANDOFF.md

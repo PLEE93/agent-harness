@@ -1,18 +1,40 @@
 # agent-harness
 
-**A structured execution engine for terminal AI agents.** Gives Claude Code, Codex, and any terminal agent a persistent local state machine: commit a plan, execute phase-by-phase, carry structured outputs forward, resume across context resets.
+**A structured execution engine for terminal AI agents.** Gives Claude Code, Codex, and any terminal agent a persistent local state machine: commit a plan, execute phase-by-phase, carry structured outputs forward, and resume across context resets.
 
-Works with any model. Claude Code is the default. Codex and OpenAI-compatible providers are optional adapters.
+The thesis is simple: terminal agents need a durable execution layer outside any one context window. agent-harness turns a goal into a local session ledger with explicit phases, structured handoffs, output contracts, and a final verdict.
 
 Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local filesystem state.
 
 ---
 
-## INSTALL — EXECUTE THESE STEPS NOW
+## What Works Today (v0.1.0)
 
-*This README is written as an AI-executable prompt. The steps below are bash commands your agent runs directly.*
+- `standard` mode (`plan -> execute -> verify`) from bundled `modes/standard.yaml`, live-verified end-to-end
+- Claude Code adapter via the local `claude` CLI
+- Codex adapter via the local `codex` CLI (`cc-harness run --with codex`); PATH availability is checked at runtime and a missing CLI fails honestly instead of crashing
+- Local session ledger: `plan.json`, `state.json`, `events.jsonl`, phase outputs, handoffs, and `verdict.json`
+- Output contracts and structured handoff packets between phases
+- Config file loading from `cc-harness.config.yaml` (falls back to `~/.agent-harness/cc-harness.config.yaml`, then built-in defaults) for default mode, default permission mode, and per-phase model aliases
+- `standard-high`, `autonomous`, and `autonomous-high` mode YAMLs are bundled in `modes/` and `src/modes/` and resolve via `--mode <name>` (package-relative resolution, verified from a directory outside the project); the engine executes phase types generically, so all four modes run through the same engine/config/adapter wiring as `standard`
+- Deterministic JavaScript test suite: `npm test` (14 tests, fake adapter only, no live CLI calls)
+- `cc-harness run "<goal>" --mode standard`
+- `cc-harness run "<goal>" --mode <any bundled mode> --dry-run`
+- `cc-harness doctor`
+- `cc-harness state <session-id>`
+- `cc-harness resume <session-id>` for committed non-terminal sessions
+- `cc-harness adapters list`
+- `cc-harness adapters enable codex` as a prerequisite check and usage hint
 
-### Step 1: Clone and install
+## In Progress
+
+- Live, end-to-end verified runs of `standard-high`, `autonomous`, and `autonomous-high` against a real Claude/Codex model — the YAML, engine, config, and CLI wiring is in place, but a full multi-turn run (including `self_sweep` and `loop_until` phases) has not been exercised outside this repo's deterministic, live-CLI-free test gate
+- Per-phase model alias overrides in a live run — `planner`/`executor`/`verifier` seats resolve through `cc-harness.config.yaml`, but multi-model routing has only been verified at the source/config level, not in a live multi-model session
+- Project-level mode overrides at `.cc-harness/modes/<mode>.yaml` — the resolution chain supports it, but it is not covered by the deterministic test suite
+
+---
+
+## Install
 
 ```bash
 git clone https://github.com/PLEE93/agent-harness.git ~/.agent-harness
@@ -21,22 +43,21 @@ npm install
 npm run build
 ```
 
-### Step 2: Verify the CLI builds
+Verify the CLI builds:
 
 ```bash
 node ~/.agent-harness/dist/cli/index.js --help
 ```
 
 Expected output starts with:
-```
+
+```text
 Usage: cc-harness [options] [command]
 
 Claude Code-native terminal harness engine
 ```
 
-If you see that — the engine is built and ready.
-
-### Step 3: Install globally
+Install globally:
 
 ```bash
 cd ~/.agent-harness && npm link
@@ -44,43 +65,41 @@ cd ~/.agent-harness && npm link
 
 After this, `cc-harness` works as a global command. If you skip this step, replace every `cc-harness` below with `node ~/.agent-harness/dist/cli/index.js`.
 
-### Step 4: Check prerequisites
+Check prerequisites:
 
 ```bash
 cc-harness doctor
 ```
 
-This reports: Node version, Claude CLI availability, Codex CLI availability, configured adapters.
+`doctor` reports the package version, Node.js version, Claude CLI availability, optional Codex CLI availability, optional TypeScript availability, and the local sessions directory status.
 
 ---
 
-## E2E TEST — RUN THIS NOW
+## E2E Test
 
-Verifies the full engine runs a real session end-to-end against a live model.
-
-### With Claude Code (default)
+This verifies the current supported path: the `standard` workflow against the local Claude Code CLI.
 
 ```bash
 cc-harness run "what is the capital of France" --mode standard --verbose
 ```
 
 Expected behavior:
-1. Harness creates `.cc-harness/sessions/<id>/` locally
-2. Runs through `standard` workflow: plan → execute → verify
-3. Calls `claude` CLI for each phase
-4. Writes `verdict.json` with `status: complete`
+
+1. Harness creates `.cc-harness/sessions/<id>/` in the current project.
+2. Runs the `standard` workflow: `plan -> execute -> verify`.
+3. Calls the local `claude` CLI for each phase.
+4. Writes `verdict.json` with the final status.
 
 Verify the session:
 
 ```bash
-# List sessions created
 ls .cc-harness/sessions/
-
-# Check the verdict (replace <id> with the session id from the listing)
-cat .cc-harness/sessions/<id>/verdict.json
+cc-harness state <session-id>
+cat .cc-harness/sessions/<session-id>/verdict.json
 ```
 
-Expected `verdict.json`:
+Expected `verdict.json` shape:
+
 ```json
 {
   "session_id": "...",
@@ -91,100 +110,65 @@ Expected `verdict.json`:
 }
 ```
 
-`status: complete` = harness is working end-to-end.
-
-### With Codex
-
-```bash
-cc-harness adapters enable codex
-cc-harness run "what is the capital of France" --mode standard --with codex --verbose
-```
-
-Same verification steps. The session ledger format is identical regardless of which model ran.
-
-### Run all four modes
-
-```bash
-cc-harness run "explain what a linked list is" --mode standard
-cc-harness run "explain what a linked list is" --mode standard-high
-cc-harness run "explain what a linked list is" --mode autonomous
-cc-harness run "explain what a linked list is" --mode autonomous-high
-```
-
-Each should complete and write `verdict.json` with `status: complete`.
+`status: complete` means the supported harness path completed end-to-end.
 
 ---
 
-## MODES
+## Modes
 
-| Mode | Phases | Use when |
+| Mode | Status | Phases |
 |---|---|---|
-| `standard` | plan → execute → verify | Bounded tasks, single pass |
-| `standard-high` | understand → plan → execute → self-sweep → verify | Higher-stakes tasks, stronger planning |
-| `autonomous` | understand → execute (loop) → verify | Open-ended, run until done |
-| `autonomous-high` | understand → plan → execute (loop) → self-sweep → verify | Complex autonomous missions |
+| `standard` | Works today, live-verified | `plan -> execute -> verify` |
+| `standard-high` | Bundled + wired, not live-verified | `understand -> plan -> execute -> self-sweep -> verify` |
+| `autonomous` | Bundled + wired, not live-verified | `understand -> execute (loop) -> verify` |
+| `autonomous-high` | Bundled + wired, not live-verified | `understand -> plan -> execute (loop) -> self-sweep -> verify` |
+
+All four modes are bundled in `modes/` and `src/modes/` and resolve via package-relative path lookup (verified from outside the project directory). `standard` is the only mode whose full phase sequence has been exercised end-to-end against a live model; the other three run through the same engine, config, and CLI wiring but have not yet been run live in this repo's deterministic gate (which forbids live CLI calls). Project-level overrides can be placed in `.cc-harness/modes/<mode>.yaml`.
 
 ---
 
-## MULTI-MODEL
+## Adapters
 
-### Default: Claude Code
+### Claude Code
 
 ```bash
-cc-harness run "fix this bug" --mode autonomous
+cc-harness run "fix this bug" --mode standard
 ```
 
-Uses `claude` CLI. Requires Claude Code installed and authenticated.
+Uses the local `claude` CLI. Requires Claude Code to be installed and authenticated.
 
-### Specific Claude model
+### Specific Claude Model
 
 ```bash
 cc-harness run "review this code" --mode standard --model claude-opus-4-5
 ```
 
-### With Codex
+The model value is passed to the Claude Code adapter.
+
+### Codex
 
 ```bash
+cc-harness run "<goal>" --mode standard --with codex
 cc-harness adapters enable codex
-cc-harness run "implement this function" --mode standard --with codex
 ```
 
-Requires Codex CLI (`npm install -g @openai/codex`).
-
-### Multi-model in one session
-
-Create `cc-harness.config.yaml` in your project root (or `~/.agent-harness/`):
-
-```yaml
-models:
-  planner: claude    # planning phases use Claude
-  executor: codex    # execution phases use Codex
-  verifier: claude   # verification phases use Claude
-```
-
-Then run without `--with` — the config routes each phase:
-
-```bash
-cc-harness run "build this feature" --mode standard-high
-```
-
-Models don't share a context window. Each phase receives a **structured handoff packet** built from the prior phase's output — not a raw transcript dump. They share a local session ledger.
+Uses the local `codex` CLI via `CodexAdapter`. Availability is checked on PATH; if Codex is not installed, `--with codex` fails honestly instead of crashing. `adapters enable codex` checks the same availability and prints an install hint when the CLI is missing.
 
 ---
 
-## COMMANDS
+## Commands
 
 ```bash
-# Run a goal through a workflow
-cc-harness run "<goal>" --mode <mode> [--model <model>] [--with <adapter>] [--verbose] [--dry-run]
+# Run a goal through the supported standard workflow
+cc-harness run "<goal>" --mode standard [--model <model>] [--permission-mode safe|ask|trust|yolo] [--verbose] [--dry-run]
 
-# Resume an interrupted session
+# Resume a committed non-terminal session
 cc-harness resume <session-id>
 
 # Inspect session state
 cc-harness state <session-id>
 
-# Adapter management
+# Adapter inspection and optional Codex prerequisite hint
 cc-harness adapters list
 cc-harness adapters enable codex
 
@@ -192,13 +176,15 @@ cc-harness adapters enable codex
 cc-harness doctor
 ```
 
+The CLI accepts `--with <adapter>` set to `claude-code` (default) or `codex`; both are wired for execution. `fake` exists for internal deterministic tests only and is not a valid `--with` value on the CLI.
+
 ---
 
-## SESSION LEDGER
+## Session Ledger
 
 Every run writes to `.cc-harness/sessions/<session-id>/`:
 
-```
+```text
 .cc-harness/sessions/<id>/
   plan.json          # committed workflow plan
   state.json         # current phase, status
@@ -210,15 +196,16 @@ Every run writes to `.cc-harness/sessions/<session-id>/`:
   summary.md         # human-readable summary
 ```
 
-Sessions are local. No network calls, no auth. Resume anytime:
+Sessions are local. No database or hosted service is required. Inspect or resume them with:
 
 ```bash
+cc-harness state <session-id>
 cc-harness resume <session-id>
 ```
 
 ---
 
-## REGISTER WITH YOUR AGENT
+## Register With Your Agent
 
 After install, append the harness instructions to your agent's config file so it uses the harness automatically on complex tasks:
 
@@ -229,19 +216,19 @@ After install, append the harness instructions to your agent's config file so it
 | Cursor / Windsurf | `.cursorrules` or project system prompt |
 
 The instruction blocks:
-- [`CLAUDE.md`](./CLAUDE.md) — for Claude Code
-- [`AGENTS.md`](./AGENTS.md) — for Codex
+
+- [`CLAUDE.md`](./CLAUDE.md) for Claude Code
+- [`AGENTS.md`](./AGENTS.md) for Codex
 
 Append the contents of the right file to your agent's instruction file.
 
 ---
 
-## LEGACY
+## Legacy
 
 The original Python harness (`harness.py`) is in [`legacy/`](./legacy/). Zero dependencies, requires only Python 3.7+.
 
 ```bash
-# Python harness — lightweight, single-file
 curl -fsSL https://raw.githubusercontent.com/PLEE93/agent-harness/main/legacy/harness.py \
   -o ~/.agent-harness/harness.py
 python ~/.agent-harness/harness.py '{"action": "state", "session_id": "test"}'
@@ -251,10 +238,6 @@ Same harness semantics. No CLI. No modes. Use it when you want a single Python f
 
 ---
 
-## ABOUT
+## About
 
 Built as the execution backbone of the [Aurelius](https://github.com/PLEE93) autonomous agent system. Open-sourced for any terminal-based AI agent.
-
----
-
-*This README is written as an AI-executable prompt. Install and test steps are bash commands your agent runs directly.*

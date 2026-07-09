@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { ExecuteResult } from "../base";
+import type { ExecuteResult, PermissionMode } from "../base";
 import { parseClaudeStreamJson } from "./parser";
 
 export interface ClaudeCliInvocation {
@@ -7,10 +7,12 @@ export interface ClaudeCliInvocation {
   readonly model?: string;
   readonly maxTurns?: number;
   readonly workingDir?: string;
+  readonly permissionMode?: PermissionMode;
 }
 
 export function buildClaudeCodeArgv(invocation: ClaudeCliInvocation): string[] {
-  return [
+  const permissionMode = invocation.permissionMode ?? "ask";
+  const argv = [
     "claude",
     "--print",
     invocation.prompt,
@@ -21,8 +23,13 @@ export function buildClaudeCodeArgv(invocation: ClaudeCliInvocation): string[] {
     invocation.model ?? "claude",
     "--max-turns",
     String(invocation.maxTurns ?? 20),
-    "--dangerously-skip-permissions",
   ];
+
+  if (permissionMode === "yolo") {
+    argv.push("--dangerously-skip-permissions");
+  }
+
+  return argv;
 }
 
 export async function isClaudeCliAvailable(): Promise<boolean> {
@@ -69,9 +76,16 @@ export async function invokeClaudeCli(invocation: ClaudeCliInvocation): Promise<
       const stderrText = Buffer.concat(stderr).toString("utf8");
       const rawTranscript = [stdoutText, stderrText].filter(Boolean).join("\n");
 
-      if (stderrText.trim().length > 0) {
-        resolve(classifyCliText(stderrText, rawTranscript, "Claude CLI wrote to stderr"));
-        return;
+      if (code === 0 && stdoutText.trim().length > 0) {
+        const parsed = parseClaudeStreamJson(stdoutText);
+        if (parsed.status === "complete") {
+          resolve(parsed);
+          return;
+        }
+        if (stderrText.trim().length === 0) {
+          resolve(parsed);
+          return;
+        }
       }
 
       if (code !== 0) {
@@ -79,8 +93,12 @@ export async function invokeClaudeCli(invocation: ClaudeCliInvocation): Promise<
         return;
       }
 
-      const parsed = parseClaudeStreamJson(stdoutText);
-      resolve(parsed);
+      if (stderrText.trim().length > 0) {
+        resolve(classifyCliText(stderrText, rawTranscript, "Claude CLI wrote to stderr with no parseable stdout"));
+        return;
+      }
+
+      resolve({ status: "failed", output: {}, error: "Claude CLI produced no output" });
     });
   });
 }

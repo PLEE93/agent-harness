@@ -1,0 +1,46 @@
+mode: standard-high
+description: Higher-stakes single pass with dedicated planning and self-sweep before verification
+phases:
+  - name: understand
+    type: understand
+    model: planner          # high-tier model alias fills this seat
+    max_turns: 20
+    output_contract:
+      scope: string
+      done_criteria: [string]
+
+  - name: plan
+    type: plan
+    model: planner
+    max_turns: 20
+    handoff_in: understand
+    output_contract:
+      approach: string
+      steps: [object]
+
+  - name: execute
+    type: execute
+    model: executor         # caller by default
+    max_turns: 40
+    handoff_in: plan
+    output_contract:
+      result: string
+      artifacts: [string]
+
+  - name: self_sweep
+    type: analyze
+    model: planner          # high-tier reviews own work
+    max_turns: 20
+    handoff_in: execute
+    output_contract:
+      issues_found: [string]
+      verdict: pass|fail
+
+  - name: verify
+    type: test
+    model: verifier
+    max_turns: 20
+    handoff_in: [execute, self_sweep]
+    output_contract:
+      verdict: pass|fail
+      evidence: [string]

@@ -1,4 +1,4 @@
-import type { Adapter, ExecuteResult } from "../../adapters/base";
+import type { Adapter, ExecuteResult, PermissionMode } from "../../adapters/base";
 import type { WorkflowPhase } from "../ledger/plan";
 
 export interface PhaseRunnerParams {
@@ -9,6 +9,7 @@ export interface PhaseRunnerParams {
   readonly model?: string;
   readonly handoff?: object;
   readonly workingDir?: string;
+  readonly permissionMode?: PermissionMode;
 }
 
 export async function runPhase(params: PhaseRunnerParams): Promise<ExecuteResult> {
@@ -18,6 +19,7 @@ export async function runPhase(params: PhaseRunnerParams): Promise<ExecuteResult
     model: params.model,
     max_turns: params.phase.max_turns,
     working_dir: params.workingDir,
+    permissionMode: params.permissionMode,
     session_id: params.sessionId,
     phase_name: params.phase.name,
   });

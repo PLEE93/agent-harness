@@ -1,0 +1,50 @@
+mode: autonomous-high
+description: Autonomous loop with dedicated planning and self-sweep seats
+phases:
+  - name: understand
+    type: understand
+    model: planner
+    max_turns: 20
+    output_contract:
+      scope: string
+      done_criteria: [string]
+
+  - name: plan
+    type: plan
+    model: planner
+    max_turns: 20
+    handoff_in: understand
+    output_contract:
+      approach: string
+      steps: [object]
+
+  - name: execute
+    type: execute
+    model: caller
+    max_turns: 80
+    handoff_in: plan
+    loop_until:
+      field: status
+      value: complete
+    output_contract:
+      status: complete|needs_more_work|blocked
+      result: string
+      artifacts: [string]
+
+  - name: self_sweep
+    type: analyze
+    model: planner
+    max_turns: 20
+    handoff_in: execute
+    output_contract:
+      issues_found: [string]
+      verdict: pass|fail
+
+  - name: verify
+    type: test
+    model: verifier
+    max_turns: 20
+    handoff_in: [execute, self_sweep]
+    output_contract:
+      verdict: pass|fail
+      evidence: [string]

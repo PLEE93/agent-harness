@@ -1,3 +1,5 @@
+export type PermissionMode = "safe" | "ask" | "trust" | "yolo";
+
 export interface Adapter {
   readonly name: string;
   isAvailable(): Promise<boolean>;
@@ -10,6 +12,7 @@ export interface ExecuteParams {
   readonly model?: string;
   readonly max_turns?: number;
   readonly working_dir?: string;
+  readonly permissionMode?: PermissionMode;
   readonly session_id: string;
   readonly phase_name: string;
 }

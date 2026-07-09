@@ -1,14 +1,23 @@
 {
   "name": "cc-harness",
   "version": "0.1.0",
-  "description": "Claude Code-native terminal harness engine scaffold.",
+  "description": "Structured execution engine for terminal AI agents.",
   "main": "dist/cli/index.js",
   "bin": {
     "cc-harness": "dist/cli/index.js"
   },
+  "files": [
+    "dist/",
+    "modes/",
+    "legacy/",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/"
   },
   "dependencies": {
     "commander": "^12.1.0",

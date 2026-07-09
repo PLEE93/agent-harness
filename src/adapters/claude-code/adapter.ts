@@ -14,6 +14,7 @@ export class ClaudeCodeAdapter implements Adapter {
       model: params.model,
       maxTurns: params.max_turns,
       workingDir: params.working_dir,
+      permissionMode: params.permissionMode,
     });
   }
 }

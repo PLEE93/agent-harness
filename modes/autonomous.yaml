@@ -1,0 +1,32 @@
+mode: autonomous
+description: Caller-preserving execution loop — runs until done or blocked
+phases:
+  - name: understand
+    type: understand
+    model: caller
+    max_turns: 20
+    output_contract:
+      goal_understood: string
+      done_criteria: [string]
+
+  - name: execute
+    type: execute
+    model: caller
+    max_turns: 80
+    handoff_in: understand
+    loop_until:
+      field: status
+      value: complete
+    output_contract:
+      status: complete|needs_more_work|blocked
+      result: string
+      artifacts: [string]
+
+  - name: verify
+    type: test
+    model: caller
+    max_turns: 20
+    handoff_in: execute
+    output_contract:
+      verdict: pass|fail
+      evidence: [string]

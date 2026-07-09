@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
-import type { Adapter, ExecuteResult } from "../../adapters/base";
+import type { Adapter, ExecuteResult, PermissionMode } from "../../adapters/base";
 import { appendEvent } from "../ledger/events";
 import {
   createPlanFromWorkflow,
@@ -12,7 +12,7 @@ import {
   writePlan,
 } from "../ledger/plan";
 import { createInitialState, type StateFile, updateState, writeState } from "../ledger/state";
-import { createSession, type SessionRecord, writeOutput, writeTextFile } from "../ledger/session";
+import { createSession, createSessionRecord, type SessionRecord, writeOutput, writeTextFile } from "../ledger/session";
 import { createVerdict, type VerdictFile, type VerdictStatus, writeVerdict } from "../ledger/verdict";
 import { resolveModelSeat } from "./cognition";
 import { validatePhaseOutput } from "./output_validator";
@@ -27,6 +27,8 @@ export interface PhaseEngineOptions {
   readonly workflowPath?: string;
   readonly primaryModel?: string;
   readonly modelAliases?: Record<string, string>;
+  readonly permissionMode?: PermissionMode;
+  readonly startPhaseIndex?: number;
   readonly adapter?: Adapter;
   readonly adapters?: Record<string, Adapter>;
   readonly resolveAdapter?: (phase: WorkflowPhase) => Adapter;
@@ -82,6 +84,21 @@ export class PhaseEngine {
     return this.runPhases(session, plan, initialState, workspaceRoot);
   }
 
+  public async resume(plan: PlanFile, state: StateFile): Promise<PhaseEngineResult> {
+    const workspaceRoot = this.options.workspaceRoot ?? process.cwd();
+    const session = createSessionRecord(this.options.sessionId, workspaceRoot);
+    await appendEvent(session.paths.events, {
+      level: "info",
+      type: "resume_started",
+      data: {
+        session_id: plan.session_id,
+        mode: plan.mode,
+        phase_index: this.options.startPhaseIndex ?? state.phase_index,
+      },
+    });
+    return this.runPhases(session, plan, state, workspaceRoot);
+  }
+
   private async runPhases(
     session: SessionRecord,
     initialPlan: PlanFile,
@@ -90,10 +107,16 @@ export class PhaseEngine {
   ): Promise<PhaseEngineResult> {
     let plan = initialPlan;
     let state = initialState;
-    const phasesCompleted: string[] = [];
+    const startIndex = clampPhaseIndex(this.options.startPhaseIndex ?? 0, plan.phases.length);
+    const phasesCompleted = plan.phases
+      .slice(0, startIndex)
+      .filter((phase) => phase.status === "complete")
+      .map((phase) => phase.name);
     const artifacts = new Set<string>();
+    const loopCounts = new Map<string, number>();
+    const loopOutputs = new Map<string, object[]>();
 
-    for (let index = 0; index < plan.phases.length; index += 1) {
+    for (let index = startIndex; index < plan.phases.length; index += 1) {
       const phase = plan.phases[index];
       state = updateState(state, {
         current_phase: phase.name,
@@ -110,7 +133,8 @@ export class PhaseEngine {
         data: { phase: phase.name, index, model_seat: phase.model_seat },
       });
 
-      const handoff = await this.prepareHandoff(session, plan, state, phase);
+      const baseHandoff = await this.prepareHandoff(session, plan, state, phase);
+      const handoff = appendLoopHandoff(baseHandoff, loopOutputs.get(phase.name));
       const adapter = this.selectAdapter(phase);
       const model = resolveModelSeat(phase.model_seat, this.options.primaryModel ?? "caller", this.options.modelAliases).resolved;
       const result = await runPhase({
@@ -121,6 +145,7 @@ export class PhaseEngine {
         model,
         sessionId: session.sessionId,
         workingDir: workspaceRoot,
+        permissionMode: this.options.permissionMode ?? "ask",
       });
 
       await appendEvent(session.paths.events, {
@@ -157,6 +182,55 @@ export class PhaseEngine {
           data: { phase: phase.name, failures: validation.failures },
         });
         return this.finish(session, plan, "failed", phasesCompleted, Array.from(artifacts), error);
+      }
+
+      if (phase.loop_until !== undefined) {
+        const output = result.output as Record<string, unknown>;
+        const fieldValue = output[phase.loop_until.field];
+        if (fieldValue !== phase.loop_until.value) {
+          const currentLoopCount = loopCounts.get(phase.name) ?? 0;
+          const maxLoopIterations = phase.max_loop_iterations ?? 3;
+          if (currentLoopCount < maxLoopIterations) {
+            loopCounts.set(phase.name, currentLoopCount + 1);
+            loopOutputs.set(phase.name, [...(loopOutputs.get(phase.name) ?? []), result.output]);
+            await appendEvent(session.paths.events, {
+              level: "info",
+              type: "phase_loop_retry",
+              data: {
+                phase: phase.name,
+                field: phase.loop_until.field,
+                expected: phase.loop_until.value,
+                actual: fieldValue,
+                iteration: currentLoopCount + 1,
+                max_iterations: maxLoopIterations,
+              },
+            });
+            index -= 1;
+            continue;
+          }
+
+          const error = `phase '${phase.name}' loop_until not satisfied after ${maxLoopIterations} iterations: expected '${phase.loop_until.field}' to equal ${JSON.stringify(phase.loop_until.value)}, got ${JSON.stringify(fieldValue)}`;
+          state = updateState(state, {
+            status: "failed",
+            failure_count: state.failure_count + 1,
+            last_error: error,
+          });
+          plan = updatePhaseStatus(plan, phase.name, "failed");
+          await writeState(session.paths.state, state);
+          await writePlan(session.paths.plan, plan);
+          await appendEvent(session.paths.events, {
+            level: "error",
+            type: "phase_loop_limit_reached",
+            data: {
+              phase: phase.name,
+              field: phase.loop_until.field,
+              expected: phase.loop_until.value,
+              actual: fieldValue,
+              max_iterations: maxLoopIterations,
+            },
+          });
+          return this.finish(session, plan, "failed", phasesCompleted, Array.from(artifacts), error);
+        }
       }
 
       const outputPath = await writeOutput(session, phase.name, result.output);
@@ -305,18 +379,39 @@ export async function loadWorkflow(workflowPath: string): Promise<WorkflowDefini
 
 export function buildPhasePrompt(plan: PlanFile, phase: WorkflowPhase, handoff: object | undefined): string {
   const lines = [
-    `Goal: ${plan.goal}`,
-    `Mode: ${plan.mode}`,
-    `Phase: ${phase.name}`,
-    `Type: ${phase.type}`,
-    `Output contract: ${JSON.stringify(phase.output_contract ?? {}, null, 2)}`,
+    `# Phase: ${phase.name}`,
+    "",
+    `**Role:** You are the ${phase.type} actor for this harness session.`,
+    `**Goal:** ${plan.goal}`,
+    `**Mode:** ${plan.mode}`,
+    `**Your objective:** ${phase.objective ?? phase.name}`,
+    "",
+    "**Output contract (return ONLY this JSON, no prose outside the JSON block):**",
+    "```json",
+    JSON.stringify(phase.output_contract ?? {}, null, 2),
+    "```",
+    "",
+    "**Success criteria:** your output must match every field in the contract above.",
+    "**Failure mode to avoid:** returning prose instead of JSON, or JSON with wrong keys.",
+    "**When blocked:** return {\"status\": \"blocked\", \"error\": \"<reason>\", \"open_questions\": [\"...\"]}",
+    "",
+    "**Handoff JSON:** when prior phase data is supplied below, use it as context and still return only the output contract JSON.",
   ];
-  if (phase.objective !== undefined) {
-    lines.push(`Objective: ${phase.objective}`);
+
+  if (phase.loop_until !== undefined) {
+    lines.push(
+      "",
+      `**Loop condition:** this phase may be repeated until output.${phase.loop_until.field} equals ${JSON.stringify(phase.loop_until.value)}.`,
+    );
   }
+
   if (handoff !== undefined) {
-    lines.push(`Handoff packet: ${JSON.stringify(handoff, null, 2)}`);
+    lines.push("", "**Handoff from prior phases:**");
+    lines.push("```json");
+    lines.push(JSON.stringify(handoff, null, 2));
+    lines.push("```");
   }
+
   return `${lines.join("\n")}\n`;
 }
 
@@ -325,6 +420,14 @@ function isWorkflowDefinition(value: unknown): value is WorkflowDefinition {
     return false;
   }
   return value.phases.every((phase) => isRecord(phase) && typeof phase.name === "string" && typeof phase.type === "string");
+}
+
+function appendLoopHandoff(handoff: object | undefined, previousOutputs: object[] | undefined): object | undefined {
+  if (previousOutputs === undefined || previousOutputs.length === 0) {
+    return handoff;
+  }
+  const loopHandoff = { loop_previous_outputs: previousOutputs };
+  return handoff === undefined ? loopHandoff : { ...handoff, ...loopHandoff };
 }
 
 function collectArtifacts(result: ExecuteResult, artifacts: Set<string>): void {
@@ -341,6 +444,13 @@ function extractStringArray(value: unknown, key: string): string[] {
     return [];
   }
   return value[key].filter((item): item is string => typeof item === "string");
+}
+
+function clampPhaseIndex(index: number, phaseCount: number): number {
+  if (phaseCount <= 0) {
+    return 0;
+  }
+  return Math.min(Math.max(index, 0), phaseCount);
 }
 
 function buildSummary(plan: PlanFile, status: VerdictStatus, phasesCompleted: string[], detail: string): string {

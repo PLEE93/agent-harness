@@ -3,6 +3,11 @@ import { readJsonFile, writeJsonFile } from "./session";
 
 export type PhaseStatus = "pending" | "running" | "complete" | "blocked" | "failed";
 
+export interface LoopUntilCondition {
+  readonly field: string;
+  readonly value: unknown;
+}
+
 export interface WorkflowPhase {
   readonly name: string;
   readonly type: string;
@@ -14,7 +19,8 @@ export interface WorkflowPhase {
   readonly handoff_in?: string | string[];
   readonly cognition?: string;
   readonly loop?: boolean;
-  readonly loop_until?: string;
+  readonly loop_until?: LoopUntilCondition;
+  readonly max_loop_iterations?: number;
   readonly status: PhaseStatus;
 }
 
@@ -39,7 +45,8 @@ export interface WorkflowDefinitionPhase {
   readonly handoff_in?: string | string[];
   readonly cognition?: string;
   readonly loop?: boolean;
-  readonly loop_until?: string;
+  readonly loop_until?: LoopUntilCondition;
+  readonly max_loop_iterations?: number;
   readonly output_contract?: OutputContract;
 }
 
@@ -71,6 +78,7 @@ export function createPlanFromWorkflow(params: CreatePlanParams): PlanFile {
     cognition: phase.cognition,
     loop: phase.loop,
     loop_until: phase.loop_until,
+    max_loop_iterations: phase.max_loop_iterations,
     status: "pending",
   }));
 
