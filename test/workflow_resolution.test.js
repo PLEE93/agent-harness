@@ -1,8 +1,9 @@
 const assert = require('node:assert/strict');
-const { mkdtemp, mkdir, rm, writeFile } = require('node:fs/promises');
+const { mkdtemp, mkdir, readFile, rm, writeFile } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const yaml = require('js-yaml');
 
 const { resolveWorkflowPath } = require('../dist/cli/commands/run');
 
@@ -49,3 +50,39 @@ test('resolveWorkflowPath reports unknown modes clearly', async () => {
     );
   });
 });
+
+test('high modes preserve base phase shape and change model routing', async () => {
+  const standard = await readMode('standard');
+  const standardHigh = await readMode('standard-high');
+  const autonomous = await readMode('autonomous');
+  const autonomousHigh = await readMode('autonomous-high');
+
+  assert.deepEqual(phaseNames(standardHigh), phaseNames(standard));
+  assert.deepEqual(phaseNames(autonomousHigh), phaseNames(autonomous));
+
+  assert.equal(modelFor(standard, 'orient'), 'opus');
+  assert.equal(modelFor(standard, 'plan'), 'opus');
+  assert.equal(modelFor(standardHigh, 'orient'), 'fable');
+  assert.equal(modelFor(standardHigh, 'plan'), 'fable');
+  assert.equal(modelFor(standardHigh, 'execute'), modelFor(standard, 'execute'));
+  assert.equal(modelFor(standardHigh, 'verify'), modelFor(standard, 'verify'));
+
+  assert.equal(modelFor(autonomous, 'understand'), 'caller');
+  assert.equal(modelFor(autonomous, 'plan'), 'caller');
+  assert.equal(modelFor(autonomousHigh, 'understand'), 'fable');
+  assert.equal(modelFor(autonomousHigh, 'plan'), 'fable');
+  assert.equal(modelFor(autonomousHigh, 'execute'), 'caller');
+  assert.equal(modelFor(autonomousHigh, 'verify'), 'caller');
+});
+
+async function readMode(mode) {
+  return yaml.load(await readFile(path.join(repoRoot, 'modes', `${mode}.yaml`), 'utf8'));
+}
+
+function phaseNames(mode) {
+  return mode.phases.map((phase) => phase.name);
+}
+
+function modelFor(mode, phaseName) {
+  return mode.phases.find((phase) => phase.name === phaseName)?.model;
+}

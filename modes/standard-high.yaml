@@ -1,57 +1,77 @@
 mode: standard-high
-description: Higher-stakes single pass with dedicated planning and self-sweep before verification
+description: "Source-derived high standard Aurelius workflow shape: same phases as standard, but fable owns orient and plan seats."
 phases:
-  - name: understand
+  - name: orient
     type: understand
     cognition: exec_decision_memo
-    model: planner          # high-tier model alias fills this seat
+    model: fable
     max_turns: 20
     output_contract:
-      scope: string
+      reasoning_class: string
+      finished_result_image: string
       done_criteria: [string]
+
+  - name: research
+    type: research
+    cognition: epistemic_research
+    model: codex-5.5
+    max_turns: 20
+    handoff_in: orient
+    output_contract:
+      sources_read: [object]
+      gaps: [string]
 
   - name: plan
     type: plan
     cognition: exec_decision_memo
-    model: planner
+    model: fable
     max_turns: 20
-    handoff_in: understand
+    handoff_in: [orient, research]
     output_contract:
-      approach: string
-      steps: [object]
+      architecture: object
+      file_changes: [object]
+      sequence: [object]
+      risks: [object]
 
   - name: execute
     type: execute
     cognition: senior_engineer_debug
-    model: executor         # caller by default
+    model: codex-5.5
     max_turns: 40
     handoff_in: plan
     output_contract:
       result: string
       artifacts: [string]
 
-  - name: self_sweep
-    type: analyze
-    cognition: code_review
-    model: planner          # high-tier reviews own work
-    max_turns: 20
-    handoff_in: execute
-    output_contract:
-      issues_found: [string]
-      verdict: pass|fail
-
   - name: verify
     type: test
     cognition: code_review
-    model: verifier
+    model: sonnet
     max_turns: 20
-    handoff_in: [execute, self_sweep]
+    handoff_in: execute
     output_contract:
       verdict: pass|fail
       evidence: [string]
-      commands_run:
-        - command: string
-          exit_code: number
-          stdout_excerpt: string
+      commands_run: [object]
       files_checked: [string]
       residual_risk: [string]
+
+  - name: red_team
+    type: red_team
+    cognition: code_review
+    model: sonnet
+    max_turns: 20
+    handoff_in: [execute, verify]
+    output_contract:
+      vulnerabilities_found: [object]
+      ship_verdict: SAFE_TO_SHIP|FIX_FIRST|RECONSIDER
+
+  - name: synthesize
+    type: synthesize
+    cognition: exec_decision_memo
+    model: sonnet
+    max_turns: 20
+    handoff_in: [execute, verify, red_team]
+    output_contract:
+      plain_language_summary: string
+      key_takeaways: [string]

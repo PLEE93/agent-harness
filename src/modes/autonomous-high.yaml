@@ -1,10 +1,10 @@
 mode: autonomous-high
-description: Autonomous loop with dedicated planning and self-sweep seats
+description: "Source-derived high autonomous Aurelius workflow shape: same phases as autonomous, but fable owns understand and plan while caller runs non-planning phases."
 phases:
   - name: understand
     type: understand
     cognition: exec_decision_memo
-    model: planner
+    model: fable
     max_turns: 20
     output_contract:
       scope: string
@@ -13,12 +13,13 @@ phases:
   - name: plan
     type: plan
     cognition: exec_decision_memo
-    model: planner
+    model: fable
     max_turns: 20
     handoff_in: understand
     output_contract:
-      approach: string
-      steps: [object]
+      architecture: object
+      sequence: [object]
+      risks: [object]
 
   - name: execute
     type: execute
@@ -34,22 +35,35 @@ phases:
       result: string
       artifacts: [string]
 
-  - name: self_sweep
-    type: analyze
-    cognition: code_review
-    model: planner
-    max_turns: 20
-    handoff_in: execute
-    output_contract:
-      issues_found: [string]
-      verdict: pass|fail
-
   - name: verify
     type: test
     cognition: code_review
-    model: verifier
+    model: caller
     max_turns: 20
-    handoff_in: [execute, self_sweep]
+    handoff_in: execute
     output_contract:
       verdict: pass|fail
       evidence: [string]
+      commands_run: [object]
+      files_checked: [string]
+      residual_risk: [string]
+
+  - name: red_team
+    type: red_team
+    cognition: code_review
+    model: caller
+    max_turns: 20
+    handoff_in: [execute, verify]
+    output_contract:
+      vulnerabilities_found: [object]
+      ship_verdict: SAFE_TO_SHIP|FIX_FIRST|RECONSIDER
+
+  - name: synthesize
+    type: synthesize
+    cognition: exec_decision_memo
+    model: caller
+    max_turns: 20
+    handoff_in: [execute, verify, red_team]
+    output_contract:
+      plain_language_summary: string
+      key_takeaways: [string]

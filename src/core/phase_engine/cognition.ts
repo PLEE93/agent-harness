@@ -23,5 +23,5 @@ export function resolveModelSeat(
     return { requested: seat, resolved: alias, source: "alias" };
   }
 
-  return { requested: seat, resolved: callerModel, source: "caller" };
+  return { requested: seat, resolved: seat, source: "literal" };
 }

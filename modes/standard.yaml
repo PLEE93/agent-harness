@@ -1,19 +1,42 @@
 mode: standard
-description: Multi-seat workflow with explicit handoffs
+description: "Source-derived standard Aurelius workflow shape: opus frames/plans, codex-5.5 gathers and executes, sonnet verifies/red-teams/synthesizes."
 phases:
+  - name: orient
+    type: understand
+    cognition: exec_decision_memo
+    model: opus
+    max_turns: 20
+    output_contract:
+      reasoning_class: string
+      finished_result_image: string
+      done_criteria: [string]
+
+  - name: research
+    type: research
+    cognition: epistemic_research
+    model: codex-5.5
+    max_turns: 20
+    handoff_in: orient
+    output_contract:
+      sources_read: [object]
+      gaps: [string]
+
   - name: plan
     type: plan
     cognition: exec_decision_memo
-    model: planner          # alias: defaults to caller
+    model: opus
     max_turns: 20
+    handoff_in: [orient, research]
     output_contract:
-      phases: [object]
-      done_criteria: [string]
+      architecture: object
+      file_changes: [object]
+      sequence: [object]
+      risks: [object]
 
   - name: execute
     type: execute
     cognition: senior_engineer_debug
-    model: executor         # alias: defaults to caller
+    model: codex-5.5
     max_turns: 40
     handoff_in: plan
     output_contract:
@@ -23,15 +46,32 @@ phases:
   - name: verify
     type: test
     cognition: code_review
-    model: verifier         # alias: defaults to caller
+    model: sonnet
     max_turns: 20
     handoff_in: execute
     output_contract:
       verdict: pass|fail
       evidence: [string]
-      commands_run:
-        - command: string
-          exit_code: number
-          stdout_excerpt: string
+      commands_run: [object]
       files_checked: [string]
       residual_risk: [string]
+
+  - name: red_team
+    type: red_team
+    cognition: code_review
+    model: sonnet
+    max_turns: 20
+    handoff_in: [execute, verify]
+    output_contract:
+      vulnerabilities_found: [object]
+      ship_verdict: SAFE_TO_SHIP|FIX_FIRST|RECONSIDER
+
+  - name: synthesize
+    type: synthesize
+    cognition: exec_decision_memo
+    model: sonnet
+    max_turns: 20
+    handoff_in: [execute, verify, red_team]
+    output_contract:
+      plain_language_summary: string
+      key_takeaways: [string]

@@ -1,5 +1,5 @@
 mode: autonomous
-description: Caller-preserving execution loop — runs until done or blocked
+description: "Source-derived autonomous Aurelius workflow shape: every phase uses the caller-selected model."
 phases:
   - name: understand
     type: understand
@@ -10,12 +10,23 @@ phases:
       goal_understood: string
       done_criteria: [string]
 
+  - name: plan
+    type: plan
+    cognition: exec_decision_memo
+    model: caller
+    max_turns: 20
+    handoff_in: understand
+    output_contract:
+      architecture: object
+      sequence: [object]
+      risks: [object]
+
   - name: execute
     type: execute
     cognition: senior_engineer_debug
     model: caller
     max_turns: 80
-    handoff_in: understand
+    handoff_in: plan
     loop_until:
       field: status
       value: complete
@@ -33,3 +44,26 @@ phases:
     output_contract:
       verdict: pass|fail
       evidence: [string]
+      commands_run: [object]
+      files_checked: [string]
+      residual_risk: [string]
+
+  - name: red_team
+    type: red_team
+    cognition: code_review
+    model: caller
+    max_turns: 20
+    handoff_in: [execute, verify]
+    output_contract:
+      vulnerabilities_found: [object]
+      ship_verdict: SAFE_TO_SHIP|FIX_FIRST|RECONSIDER
+
+  - name: synthesize
+    type: synthesize
+    cognition: exec_decision_memo
+    model: caller
+    max_turns: 20
+    handoff_in: [execute, verify, red_team]
+    output_contract:
+      plain_language_summary: string
+      key_takeaways: [string]

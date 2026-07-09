@@ -20,17 +20,22 @@ export interface TaskRoute {
 
 export function routeTask(goal: string): TaskRoute {
   const normalized = goal.toLowerCase();
+  const highRequested = /\b(high|high-tier|higher-tier|fable|premium model|stronger model)\b/.test(normalized);
+  const autonomousRequested = /\b(autonomous|long-running|loop until|keep working|multi-step)\b/.test(normalized);
+  const buildMode = autonomousRequested
+    ? (highRequested ? "autonomous-high" : "autonomous")
+    : (highRequested ? "standard-high" : "standard");
   if (/\b(debug|bug|failing|failure|fix test|broken|regression)\b/.test(normalized)) {
-    return route("coding_debug", "standard-high", "senior_engineer_debug", "ask", "source defect or failing behavior needs root-cause diagnosis");
+    return route("coding_debug", buildMode, "senior_engineer_debug", "ask", "source defect or failing behavior needs root-cause diagnosis");
   }
   if (/\b(refactor|rename|move|split|extract)\b/.test(normalized)) {
-    return route("refactor", "standard-high", "refactor_safe", "ask", "behavior preservation matters more than speed");
+    return route("refactor", buildMode, "refactor_safe", "ask", "behavior preservation matters more than speed");
   }
   if (/\b(build|implement|feature|add|create)\b/.test(normalized)) {
-    return route("coding_feature", "standard-high", "senior_engineer_debug", "ask", "source change needs plan, execution, self-sweep, and verification");
+    return route("coding_feature", buildMode, "senior_engineer_debug", "ask", "source change needs plan, execution, and verification");
   }
   if (/\b(audit|review|inspect|critique)\b/.test(normalized)) {
-    return route("audit", "standard-high", "code_review", "safe", "audit work needs evidence-first review and low write permissions");
+    return route("audit", highRequested ? "standard-high" : "standard", "code_review", "safe", "audit work needs evidence-first review and low write permissions");
   }
   if (/\b(research|compare|sources|market|latest)\b/.test(normalized)) {
     return route("research", "standard", "epistemic_research", "safe", "research needs source/evidence separation");
@@ -39,7 +44,7 @@ export function routeTask(goal: string): TaskRoute {
     return route("decision_memo", "standard", "exec_decision_memo", "safe", "decision work needs options, tradeoffs, recommendation, and next action");
   }
   if (/\b(deploy|restart|install|server|ops|release)\b/.test(normalized)) {
-    return route("ops", "standard-high", "senior_engineer_debug", "ask", "operations work needs evidence-native verification and conservative permissions");
+    return route("ops", buildMode, "senior_engineer_debug", "ask", "operations work needs evidence-native verification and conservative permissions");
   }
   return route("writing", "standard", "exec_decision_memo", "safe", "default route for non-code structured work");
 }

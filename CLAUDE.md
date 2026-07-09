@@ -23,22 +23,26 @@ When in doubt → COMPLEX.
 ### FOR COMPLEX TASKS: PICK A MODE AND RUN
 
 ```bash
-# Standard: plan → execute → verify (bounded tasks, single pass)
+# Standard: Aurelius standard shape, opus/codex/sonnet role routing
 cc-harness run "<goal>" --mode standard
 
-# Standard-High: stronger planning + self-sweep before verify
+# Standard-High: same standard phase shape; fable owns orient/plan
 cc-harness run "<goal>" --mode standard-high
 
-# Autonomous: loop until done or blocked (open-ended work)
+# Autonomous: same selected caller model runs every phase
 cc-harness run "<goal>" --mode autonomous
 
-# Autonomous-High: autonomous + stronger planning + self-sweep
+# Autonomous-High: same autonomous phase shape; fable owns understand/plan
 cc-harness run "<goal>" --mode autonomous-high
 ```
 
 Add `--verbose` to see phase-by-phase output. Add `--dry-run` to plan without executing.
 
 ---
+
+### MODEL ROUTING
+
+High modes mean model routing, not extra phases. Literal phase models such as `fable`, `opus`, `codex-5.5`, and `sonnet` are preserved unless config aliases override them.
 
 ### MULTI-MODEL
 

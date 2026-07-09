@@ -1,6 +1,6 @@
 # agent-harness
 
-**A structured execution engine for terminal AI agents.** Gives Claude Code, Codex, and any terminal agent a persistent local state machine: commit a plan, execute phase-by-phase, carry structured outputs forward, and resume across context resets.
+**A portable extraction of the Aurelius harness state machine for terminal AI agents.** Gives Claude Code, Codex, and any terminal agent a persistent local state machine: commit a plan, execute phase-by-phase, carry structured outputs forward, and resume across context resets.
 
 The thesis is simple: terminal agents need a durable execution layer outside any one context window. agent-harness turns a goal into a local session ledger with explicit phases, structured handoffs, output contracts, and a final verdict.
 
@@ -10,7 +10,8 @@ Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local f
 
 ## What Works Today (v0.1.0)
 
-- `standard` mode (`plan -> execute -> verify`) from bundled `modes/standard.yaml`, live-verified end-to-end
+- Source-derived Aurelius mode shapes in bundled `modes/*.yaml`: `standard`, `standard-high`, `autonomous`, and `autonomous-high`
+- High modes mean **high-tier model routing first**: `standard-high` pins `fable` to orient/plan while keeping the standard phase shape; `autonomous-high` pins `fable` to understand/plan while keeping the autonomous phase shape
 - Claude Code adapter via the local `claude` CLI
 - Codex adapter via the local `codex` CLI (`cc-harness run --with codex`); PATH availability is checked at runtime and a missing CLI fails honestly instead of crashing
 - Local session ledger: `plan.json`, `state.json`, `events.jsonl`, phase outputs, handoffs, and `verdict.json`
@@ -24,13 +25,8 @@ Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local f
 - Artifact manifests validate claimed artifacts stay inside the workspace, exist, and include size + SHA-256
 - Per-phase flight recorder under each session: prompt, adapter invocation, handoff, raw transcript, parsed output, validation, and timing
 - Local run index under `.cc-harness/index/` for sessions and classified failures
-- `cc-harness eval` for deterministic harness-quality checks, baseline comparisons against raw-agent failure modes, and conversion of prior failure records into reusable eval case records
-- `cc-harness replay` reconstructs a run from the ledger
-- `cc-harness benchmark` writes deterministic harness-vs-raw comparison reports; `--live` is explicit and blocks unless real live benchmark prerequisites exist
-- `cc-harness improve --from-failures` converts indexed failures into eval cases and patch proposals
-- `cc-harness route` classifies tasks into mode, cognition pack, verifier type, artifact schema, and permission mode
-- `standard-high`, `autonomous`, and `autonomous-high` mode YAMLs are bundled in `modes/` and `src/modes/` and resolve via `--mode <name>` (package-relative resolution, verified from a directory outside the project); the engine executes phase types generically, so all four modes run through the same engine/config/adapter wiring as `standard`
-- Deterministic JavaScript test suite: `npm test` (20 tests, fake adapter only, no live CLI calls)
+- OSS support utilities, not Aurelius core semantics: `eval`, `replay`, `benchmark`, `improve`, and `route`
+- Deterministic JavaScript test suite: `npm test` (fake adapter only, no live CLI calls)
 - `cc-harness run "<goal>" --mode standard`
 - `cc-harness run "<goal>" --mode <any bundled mode> --dry-run`
 - `cc-harness doctor`
@@ -41,7 +37,7 @@ Requires Node.js 18+. No cloud service, no MCP server, no database. Pure local f
 
 ## In Progress
 
-- Live, end-to-end verified runs of `standard-high`, `autonomous`, and `autonomous-high` against a real Claude/Codex model — the YAML, engine, config, and CLI wiring is in place, but a full multi-turn run (including `self_sweep` and `loop_until` phases) has not been exercised outside this repo's deterministic, live-CLI-free test gate
+- Live, end-to-end verified runs of all source-derived modes against real Claude/Codex models — the YAML, engine, config, and CLI wiring is in place, but the deterministic test gate does not invoke live model CLIs
 - Live per-seat mixed-adapter runs — `planner`/`executor`/`verifier` seats now select adapters and models from `cc-harness.config.yaml`, but the deterministic test gate still does not invoke real Claude/Codex processes
 - Live benchmark suite comparing harnessed agents against raw model use on the same real tasks — `cc-harness eval` now proves deterministic quality properties and baseline failure prevention, but it does not yet run live model-vs-model benchmarks
 - Project-level mode overrides at `.cc-harness/modes/<mode>.yaml` — the resolution chain supports it, but it is not covered by the deterministic test suite
@@ -91,7 +87,7 @@ cc-harness doctor
 
 ## E2E Test
 
-This verifies the current supported path: the `standard` workflow against the local Claude Code CLI.
+This verifies the current supported path: the `standard` source-derived workflow against the local Claude Code CLI.
 
 ```bash
 cc-harness run "what is the capital of France" --mode standard --verbose
@@ -100,7 +96,7 @@ cc-harness run "what is the capital of France" --mode standard --verbose
 Expected behavior:
 
 1. Harness creates `.cc-harness/sessions/<id>/` in the current project.
-2. Runs the `standard` workflow: `plan -> execute -> verify`.
+2. Runs the `standard` workflow: `orient -> research -> plan -> execute -> verify -> red_team -> synthesize`.
 3. Calls the local `claude` CLI for each phase.
 4. Writes `verdict.json` with the final status.
 
@@ -123,7 +119,7 @@ Expected `verdict.json` shape:
   "verification_status": "pass",
   "final_status": "success",
   "status": "complete",
-  "phases_completed": ["plan", "execute", "verify"]
+  "phases_completed": ["orient", "research", "plan", "execute", "verify", "red_team", "synthesize"]
 }
 ```
 
@@ -135,12 +131,12 @@ Expected `verdict.json` shape:
 
 | Mode | Status | Phases |
 |---|---|---|
-| `standard` | Works today, live-verified | `plan -> execute -> verify` |
-| `standard-high` | Bundled + wired, not live-verified | `understand -> plan -> execute -> self-sweep -> verify` |
-| `autonomous` | Bundled + wired, not live-verified | `understand -> execute (loop) -> verify` |
-| `autonomous-high` | Bundled + wired, not live-verified | `understand -> plan -> execute (loop) -> self-sweep -> verify` |
+| `standard` | Source-derived, deterministic-tested | `orient -> research -> plan -> execute -> verify -> red_team -> synthesize` |
+| `standard-high` | Source-derived, deterministic-tested | Same phase shape as `standard`; `fable` replaces `opus` in orient/plan seats |
+| `autonomous` | Source-derived, deterministic-tested | `understand -> plan -> execute (loop) -> verify -> red_team -> synthesize`, all `caller` model |
+| `autonomous-high` | Source-derived, deterministic-tested | Same phase shape as `autonomous`; `fable` replaces `caller` in understand/plan seats |
 
-All four modes are bundled in `modes/` and `src/modes/` and resolve via package-relative path lookup (verified from outside the project directory). `standard` is the only mode whose full phase sequence has been exercised end-to-end against a live model; the other three run through the same engine, config, and CLI wiring but have not yet been run live in this repo's deterministic gate (which forbids live CLI calls). Project-level overrides can be placed in `.cc-harness/modes/<mode>.yaml`.
+All four modes are bundled in `modes/` and `src/modes/` and resolve via package-relative path lookup. The `*-high` variants are **model routing variants**, not extra-phase variants. Project-level overrides can be placed in `.cc-harness/modes/<mode>.yaml`.
 
 ---
 
@@ -183,7 +179,7 @@ The permission matrix is adapter-specific. Codex modes are mapped by the harness
 
 ## Per-Seat Routing
 
-Use `seats:` when planning, execution, and verification should run on different adapters or models:
+Use `seats:` to override a model seat. Literal phase models such as `fable`, `opus`, `codex-5.5`, and `sonnet` are preserved unless a config alias overrides them:
 
 ```yaml
 seats:
